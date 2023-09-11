@@ -2,6 +2,7 @@ package endpoints
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -12,9 +13,12 @@ import (
 	"github.com/mariadb-operator/mariadb-operator/pkg/statefulset"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	klabels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+var ErrNoAddressesAvailable = errors.New("no addresses available")
 
 type EndpointsReconciler struct {
 	client.Client
@@ -31,6 +35,9 @@ func NewEndpointsReconciler(client client.Client, builder *builder.Builder) *End
 func (r *EndpointsReconciler) Reconcile(ctx context.Context, key types.NamespacedName, mariadb *mariadbv1alpha1.MariaDB) error {
 	desiredEndpoints, err := r.endpoints(ctx, key, mariadb)
 	if err != nil {
+		if errors.Is(err, ErrNoAddressesAvailable) {
+			return err
+		}
 		return fmt.Errorf("error building desired Endpoints: %v", err)
 	}
 
@@ -55,12 +62,16 @@ func (r *EndpointsReconciler) endpoints(ctx context.Context, key types.Namespace
 	if mariadb.Status.CurrentPrimaryPodIndex == nil {
 		return nil, fmt.Errorf("'status.currentPrimaryPodIndex' must be set")
 	}
-	podLabels :=
-		labels.NewLabelsBuilder().
-			WithMariaDB(mariadb).
-			Build()
 	podList := corev1.PodList{}
-	if err := r.List(ctx, &podList, client.MatchingLabels(podLabels)); err != nil {
+	listOpts := &client.ListOptions{
+		LabelSelector: klabels.SelectorFromSet(
+			labels.NewLabelsBuilder().
+				WithMariaDB(mariadb).
+				Build(),
+		),
+		Namespace: mariadb.GetNamespace(),
+	}
+	if err := r.List(ctx, &podList, listOpts); err != nil {
 		return nil, fmt.Errorf("error listing Pods: %v", err)
 	}
 	sort.Slice(podList.Items, func(i, j int) bool {
@@ -88,6 +99,10 @@ func (r *EndpointsReconciler) endpoints(ctx context.Context, key types.Namespace
 			notReadyAddresses = append(notReadyAddresses, *addr)
 		}
 	}
+	if len(addresses) == 0 && len(notReadyAddresses) == 0 {
+		return nil, ErrNoAddressesAvailable
+	}
+
 	subsets := []corev1.EndpointSubset{
 		{
 			Addresses:         addresses,
@@ -101,7 +116,6 @@ func (r *EndpointsReconciler) endpoints(ctx context.Context, key types.Namespace
 			},
 		},
 	}
-
 	endpoints, err := r.builder.BuildEndpoints(key, mariadb, subsets)
 	if err != nil {
 		return nil, fmt.Errorf("error building Endpoints: %v", err)

@@ -6,10 +6,7 @@ spec:
   mariaDbRef:
     name: mariadb
   privileges:
-    - "CREATE"
-    - "SELECT"
-    - "INSERT"
-    - "UPDATE"
+    - "ALL"
   database: "*"
   table: "*"
   username: photoprism
