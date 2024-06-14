@@ -1,0 +1,18 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Grant
+metadata:
+  name: maxscale-repl-client
+spec:
+  mariaDbRef:
+    name: mariadb-repl
+  privileges:
+    - "SELECT"
+    - "INSERT"
+    - "UPDATE"
+    - "DELETE"
+  database: "*"
+  table: "*"
+  username: maxscale-repl-client
+  grantOption: false
+  host: "%" 
+  retryInterval: 5s

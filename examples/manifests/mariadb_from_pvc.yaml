@@ -1,0 +1,25 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: MariaDB
+metadata:
+  name: mariadb-from-pvc
+spec:
+  storage:
+    size: 1Gi
+
+  bootstrapFrom:
+    volume:
+      persistentVolumeClaim:
+        claimName: backup-scheduled
+    targetRecoveryTime: 2023-12-19T09:00:00Z
+    restoreJob:
+      metadata:
+        labels:
+          sidecar.istio.io/inject: "false"
+      args:
+        - "--verbose"
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          memory: 1Gi

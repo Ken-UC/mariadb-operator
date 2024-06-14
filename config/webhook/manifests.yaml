@@ -2,7 +2,6 @@
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
-  creationTimestamp: null
   name: mutating-webhook-configuration
 webhooks:
 - admissionReviewVersions:
@@ -11,12 +10,12 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /mutate-mariadb-mmontes-io-v1alpha1-mariadb
+      path: /mutate-k8s-mariadb-com-v1alpha1-mariadb
   failurePolicy: Fail
   name: mmariadb.kb.io
   rules:
   - apiGroups:
-    - mariadb.mmontes.io
+    - k8s.mariadb.com
     apiVersions:
     - v1alpha1
     operations:
@@ -29,7 +28,6 @@ webhooks:
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
-  creationTimestamp: null
   name: validating-webhook-configuration
 webhooks:
 - admissionReviewVersions:
@@ -38,12 +36,12 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-mariadb-mmontes-io-v1alpha1-backup
+      path: /validate-k8s-mariadb-com-v1alpha1-backup
   failurePolicy: Fail
   name: vbackup.kb.io
   rules:
   - apiGroups:
-    - mariadb.mmontes.io
+    - k8s.mariadb.com
     apiVersions:
     - v1alpha1
     operations:
@@ -58,12 +56,12 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-mariadb-mmontes-io-v1alpha1-connection
+      path: /validate-k8s-mariadb-com-v1alpha1-connection
   failurePolicy: Fail
   name: vconnection.kb.io
   rules:
   - apiGroups:
-    - mariadb.mmontes.io
+    - k8s.mariadb.com
     apiVersions:
     - v1alpha1
     operations:
@@ -78,12 +76,12 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-mariadb-mmontes-io-v1alpha1-database
+      path: /validate-k8s-mariadb-com-v1alpha1-database
   failurePolicy: Fail
   name: vdatabase.kb.io
   rules:
   - apiGroups:
-    - mariadb.mmontes.io
+    - k8s.mariadb.com
     apiVersions:
     - v1alpha1
     operations:
@@ -98,12 +96,12 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-mariadb-mmontes-io-v1alpha1-grant
+      path: /validate-k8s-mariadb-com-v1alpha1-grant
   failurePolicy: Fail
   name: vgrant.kb.io
   rules:
   - apiGroups:
-    - mariadb.mmontes.io
+    - k8s.mariadb.com
     apiVersions:
     - v1alpha1
     operations:
@@ -118,12 +116,12 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-mariadb-mmontes-io-v1alpha1-mariadb
+      path: /validate-k8s-mariadb-com-v1alpha1-mariadb
   failurePolicy: Fail
   name: vmariadb.kb.io
   rules:
   - apiGroups:
-    - mariadb.mmontes.io
+    - k8s.mariadb.com
     apiVersions:
     - v1alpha1
     operations:
@@ -138,12 +136,32 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-mariadb-mmontes-io-v1alpha1-restore
+      path: /validate-k8s-mariadb-com-v1alpha1-maxscale
+  failurePolicy: Fail
+  name: vmaxscale.kb.io
+  rules:
+  - apiGroups:
+    - k8s.mariadb.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - maxscales
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-k8s-mariadb-com-v1alpha1-restore
   failurePolicy: Fail
   name: vrestore.kb.io
   rules:
   - apiGroups:
-    - mariadb.mmontes.io
+    - k8s.mariadb.com
     apiVersions:
     - v1alpha1
     operations:
@@ -158,12 +176,12 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-mariadb-mmontes-io-v1alpha1-sqljob
+      path: /validate-k8s-mariadb-com-v1alpha1-sqljob
   failurePolicy: Fail
   name: vsqljob.kb.io
   rules:
   - apiGroups:
-    - mariadb.mmontes.io
+    - k8s.mariadb.com
     apiVersions:
     - v1alpha1
     operations:
@@ -178,12 +196,12 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-mariadb-mmontes-io-v1alpha1-user
+      path: /validate-k8s-mariadb-com-v1alpha1-user
   failurePolicy: Fail
   name: vuser.kb.io
   rules:
   - apiGroups:
-    - mariadb.mmontes.io
+    - k8s.mariadb.com
     apiVersions:
     - v1alpha1
     operations:

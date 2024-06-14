@@ -1,0 +1,27 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Restore
+metadata:
+  name: restore
+spec:
+  mariaDbRef:
+    name: mariadb
+  backupRef:
+    name: backup
+  inheritMetadata:
+    annotations:
+      database.myorg.io: mariadb
+  podMetadata:
+    labels:
+      sidecar.istio.io/inject: "false"
+  serviceAccountName: restore
+  args:
+    - --verbose
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 512Mi
+  affinity:
+    antiAffinityEnabled: true

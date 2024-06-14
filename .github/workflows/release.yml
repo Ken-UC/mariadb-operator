@@ -6,47 +6,86 @@ on:
       - "v*"
 
 env:
-  GORELEASER_VERSION: "v1.18.2"
+  GORELEASER_VERSION: "v1.24.0"
 
 jobs:
-  release:
-    name: Release
+  args:
+    name: Arguments
     runs-on: ubuntu-latest
+    outputs:
+      BUILD_DATE: ${{ steps.args.outputs.BUILD_DATE }}
+      TAG: ${{ steps.args.outputs.TAG }}
+      VERSION: ${{ steps.args.outputs.VERSION }}
+      RELEASE_ARGS: ${{ steps.args.outputs.RELEASE_ARGS }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Fetch tags
         run: git fetch --force --tags
 
+      - name: Args
+        id: args
+        run: |
+          function get_version() {
+            echo "$1" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'
+          }
+          TAG=${GITHUB_REF/refs\/tags\//}
+          VERSION=$(get_version "$TAG")
+          MAKE_VERSION=$(get_version $(make version))
+
+          if [ "$VERSION" != "$MAKE_VERSION" ]; then
+            echo "Tag('$TAG') with version('$VERSION') and Makefile version('$MAKE_VERSION') don't match!"
+            exit 1;
+          fi
+          
+          RELEASE_ARGS=release
+          RELEASE_HEADER_TMPL=docs/releases/RELEASE_${TAG}_HEADER.md.gotmpl
+          RELEASE_FOOTER_TMPL=docs/releases/RELEASE_${TAG}_FOOTER.md.gotmpl
+          if [ -f "${RELEASE_HEADER_TMPL}" ]; then
+            RELEASE_ARGS="${RELEASE_ARGS} --release-header-tmpl=${RELEASE_HEADER_TMPL}"
+          else
+            RELEASE_ARGS="${RELEASE_ARGS} --release-header-tmpl=docs/releases/RELEASE_HEADER.md.gotmpl"
+          fi
+          if [ -f "${RELEASE_FOOTER_TMPL}" ]; then
+            RELEASE_ARGS="${RELEASE_ARGS} --release-footer-tmpl=${RELEASE_FOOTER_TMPL}"
+          else
+            RELEASE_ARGS="${RELEASE_ARGS} --release-footer-tmpl=docs/releases/RELEASE_FOOTER.md.gotmpl"
+          fi
+          
+          echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+          echo "TAG=${TAG}" >> $GITHUB_OUTPUT
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "RELEASE_ARGS=${RELEASE_ARGS}" >> $GITHUB_OUTPUT
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs: args
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Setup QEMU
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
         id: buildx
 
-      - name: Login to container Registry
-        uses: docker/login-action@v2
+      - name: Login GHCR
+        uses: docker/login-action@v3
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
           registry: ghcr.io
 
-      - name: Prepare
-        id: prep
-        run: |
-          VERSION=sha-${GITHUB_SHA::8}
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF/refs\/tags\//}
-          fi
-          echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
-          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-
       - name: Publish multi-arch Docker image
-        uses: docker/build-push-action@v2
+        uses: docker/build-push-action@v5
         with:
           push: true
           builder: ${{ steps.buildx.outputs.name }}
@@ -54,7 +93,7 @@ jobs:
           file: ./Dockerfile
           platforms: linux/arm64,linux/amd64
           tags: |
-            ghcr.io/${{ github.repository_owner }}/mariadb-operator:${{ steps.prep.outputs.VERSION }}
+            ghcr.io/${{ github.repository_owner }}/mariadb-operator:${{ needs.args.outputs.TAG }}
             ghcr.io/${{ github.repository_owner }}/mariadb-operator:latest
           labels: |
             org.opencontainers.image.title=${{ github.event.repository.name }}
@@ -62,16 +101,84 @@ jobs:
             org.opencontainers.image.source=${{ github.event.repository.html_url }}
             org.opencontainers.image.url=${{ github.event.repository.html_url }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.prep.outputs.VERSION }}
-            org.opencontainers.image.created=${{ steps.prep.outputs.BUILD_DATE }}
+            org.opencontainers.image.version=${{ needs.args.outputs.VERSION }}
+            org.opencontainers.image.created=${{ needs.args.outputs.BUILD_DATE }}
+
+  release-ent:
+    name: Release enterprise
+    runs-on: ubuntu-latest
+    needs: args
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        id: buildx
+
+      - name: Login DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USER }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate licenses
+        run: make licenses
+
+      - name: Publish multi-arch Docker image
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: ./Dockerfile.ent
+          platforms: linux/arm64,linux/amd64
+          tags: |
+            mariadb/mariadb-operator-enterprise:${{ needs.args.outputs.TAG }}
+            mariadb/mariadb-operator-enterprise:latest
+          labels: |
+            org.opencontainers.image.title=MariaDB Operator Enterprise
+            org.opencontainers.image.description=Run and operate MariaDB Enterprise in OpenShift
+            org.opencontainers.image.source=${{ github.event.repository.html_url }}
+            org.opencontainers.image.url=${{ github.event.repository.html_url }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.args.outputs.VERSION }}
+            org.opencontainers.image.created=${{ needs.args.outputs.BUILD_DATE }}
+
+      - name: Preflight operator image
+        run: make preflight-image-submit
+        env:
+          REDHAT_API_KEY: "${{ secrets.REDHAT_API_KEY }}"
+          REDHAT_PROJECT_ID: "${{ secrets.REDHAT_PROJECT_ID }}"
+  
+  goreleaser:
+    name: Goreleaser
+    runs-on: ubuntu-latest
+    needs:
+      - args 
+      - release
+      - release-ent
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: git fetch --force --tags
 
       - name: Set GORELEASER_PREVIOUS_TAG
         run: echo "GORELEASER_PREVIOUS_TAG=$(git tag -l "v*" --sort=-version:refname | head -n 2 | tail -n 1)" >> $GITHUB_ENV
 
       - name: GoReleaser
-        uses: goreleaser/goreleaser-action@v4
+        uses: goreleaser/goreleaser-action@v5
         with:
           version: ${{ env.GORELEASER_VERSION }}
-          args: release
+          args: ${{ needs.args.outputs.RELEASE_ARGS }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

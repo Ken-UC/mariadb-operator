@@ -9,7 +9,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -25,16 +27,36 @@ func NewRBACReconiler(client client.Client, builder *builder.Builder) *RBACRecon
 	}
 }
 
-func (r *RBACReconciler) Reconcile(ctx context.Context, mariadb *mariadbv1alpha1.MariaDB) error {
-	if !mariadb.Galera().Enabled {
-		return nil
+func (r *RBACReconciler) ReconcileServiceAccount(ctx context.Context, key types.NamespacedName, owner metav1.Object,
+	meta *mariadbv1alpha1.Metadata) (*corev1.ServiceAccount, error) {
+	var existingSA corev1.ServiceAccount
+	err := r.Get(ctx, key, &existingSA)
+	if err == nil {
+		return &existingSA, nil
 	}
-	key := client.ObjectKeyFromObject(mariadb)
-	sa, err := r.reconcileServiceAccount(ctx, key, mariadb)
+	if !apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("error getting ServiceAccount: %v", err)
+	}
+
+	sa, err := r.builder.BuildServiceAccount(key, owner, meta)
+	if err != nil {
+		return nil, fmt.Errorf("error building ServiceAccount: %v", err)
+	}
+	if err := r.Create(ctx, sa); err != nil {
+		return nil, fmt.Errorf("error creating ServiceAccount: %v", err)
+	}
+	return sa, nil
+}
+
+func (r *RBACReconciler) ReconcileMariadbRBAC(ctx context.Context, mariadb *mariadbv1alpha1.MariaDB) error {
+	key := mariadb.Spec.PodTemplate.ServiceAccountKey(mariadb.ObjectMeta)
+	sa, err := r.ReconcileServiceAccount(ctx, key, mariadb, mariadb.Spec.InheritMetadata)
 	if err != nil {
 		return fmt.Errorf("error reconciling ServiceAccount: %v", err)
 	}
-
+	if !mariadb.IsGaleraEnabled() {
+		return nil
+	}
 	role, err := r.reconcileRole(ctx, key, mariadb)
 	if err != nil {
 		return fmt.Errorf("error reconciling Role: %v", err)
@@ -49,14 +71,16 @@ func (r *RBACReconciler) Reconcile(ctx context.Context, mariadb *mariadbv1alpha1
 		return fmt.Errorf("error reconciling RoleBinding: %v", err)
 	}
 
-	if mariadb.Galera().Agent.KubernetesAuth.Enabled {
+	agent := ptr.Deref(mariadb.Spec.Galera, mariadbv1alpha1.Galera{}).Agent
+	k8sAuth := ptr.Deref(agent.KubernetesAuth, mariadbv1alpha1.KubernetesAuth{})
+	if k8sAuth.Enabled {
 		authDelegatorRoleRef := rbacv1.RoleRef{
 			APIGroup: rbacv1.GroupName,
 			Kind:     "ClusterRole",
 			Name:     "system:auth-delegator",
 		}
 		key := types.NamespacedName{
-			Name:      fmt.Sprintf("%s:auth-delegator", mariadb.Galera().Agent.KubernetesAuth.AuthDelegatorRoleNameOrDefault(mariadb)),
+			Name:      fmt.Sprintf("%s:auth-delegator", k8sAuth.AuthDelegatorRoleNameOrDefault(mariadb)),
 			Namespace: mariadb.Namespace,
 		}
 		if err := r.reconcileClusterRoleBinding(ctx, key, mariadb, sa, authDelegatorRoleRef); err != nil {
@@ -66,27 +90,6 @@ func (r *RBACReconciler) Reconcile(ctx context.Context, mariadb *mariadbv1alpha1
 	return nil
 }
 
-func (r *RBACReconciler) reconcileServiceAccount(ctx context.Context, key types.NamespacedName,
-	mariadb *mariadbv1alpha1.MariaDB) (*corev1.ServiceAccount, error) {
-	var existingSA corev1.ServiceAccount
-	err := r.Get(ctx, key, &existingSA)
-	if err == nil {
-		return &existingSA, nil
-	}
-	if err != nil && !apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("error getting ServiceAccount: %v", err)
-	}
-
-	sa, err := r.builder.BuildServiceAccount(key, mariadb)
-	if err != nil {
-		return nil, fmt.Errorf("error building ServiceAccount: %v", err)
-	}
-	if err := r.Create(ctx, sa); err != nil {
-		return nil, fmt.Errorf("error creating ServiceAccount: %v", err)
-	}
-	return sa, nil
-}
-
 func (r *RBACReconciler) reconcileRole(ctx context.Context, key types.NamespacedName,
 	mariadb *mariadbv1alpha1.MariaDB) (*rbacv1.Role, error) {
 	var existingRole rbacv1.Role
@@ -94,7 +97,7 @@ func (r *RBACReconciler) reconcileRole(ctx context.Context, key types.Namespaced
 	if err == nil {
 		return &existingRole, nil
 	}
-	if err != nil && !apierrors.IsNotFound(err) {
+	if !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("error getting Role: %v", err)
 	}
 
@@ -139,7 +142,7 @@ func (r *RBACReconciler) reconcileRoleBinding(ctx context.Context, key types.Nam
 	if err == nil {
 		return nil
 	}
-	if err != nil && !apierrors.IsNotFound(err) {
+	if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("error getting RoleBinding: %v", err)
 	}
 
@@ -166,7 +169,7 @@ func (r *RBACReconciler) reconcileClusterRoleBinding(ctx context.Context, key ty
 		}
 		return nil
 	}
-	if err != nil && !apierrors.IsNotFound(err) {
+	if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("error getting ClusterRoleBinding: %v", err)
 	}
 

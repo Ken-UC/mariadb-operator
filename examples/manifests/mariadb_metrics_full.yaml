@@ -1,0 +1,37 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: MariaDB
+metadata:
+  name: mariadb
+spec:
+  storage:
+    size: 1Gi
+
+  service:
+    type: LoadBalancer
+    metadata:
+      annotations:
+        metallb.universe.tf/loadBalancerIPs: 172.18.0.20
+
+  metrics:
+    enabled: true
+    exporter:
+      image: prom/mysqld-exporter:v0.15.1
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 300m
+          memory: 512Mi
+      port: 9104
+      affinity:
+        antiAffinityEnabled: true
+    serviceMonitor:
+      prometheusRelease: kube-prometheus-stack
+      jobLabel: mariadb-monitoring
+      interval: 10s
+      scrapeTimeout: 10s
+    username: monitoring
+    passwordSecretKeyRef:
+      name: mariadb
+      key: password

@@ -1,19 +1,3 @@
-/*
-Copyright 2022.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package v1alpha1
 
 import (
@@ -21,29 +5,56 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // GrantSpec defines the desired state of Grant
 type GrantSpec struct {
+	// SQLTemplate defines templates to configure SQL objects.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	SQLTemplate `json:",inline"`
+	// MariaDBRef is a reference to a MariaDB object.
 	// +kubebuilder:validation:Required
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	MariaDBRef MariaDBRef `json:"mariaDbRef" webhook:"inmutable"`
+	// Privileges to use in the Grant.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	Privileges []string `json:"privileges" webhook:"inmutable"`
+	// Database to use in the Grant.
+	// +optional
 	// +kubebuilder:default=*
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	Database string `json:"database,omitempty" webhook:"inmutable"`
+	// Table to use in the Grant.
+	// +optional
 	// +kubebuilder:default=*
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	Table string `json:"table,omitempty" webhook:"inmutable"`
+	// Username to use in the Grant.
 	// +kubebuilder:validation:Required
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	Username string `json:"username" webhook:"inmutable"`
+	// Host to use in the Grant. It can be localhost, an IP or '%'.
+	// +optional
 	// +kubebuilder:MaxLength=255
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	Host *string `json:"host,omitempty" webhook:"inmutable"`
+	// GrantOption to use in the Grant.
+	// +optional
 	// +kubebuilder:default=false
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch"}
 	GrantOption bool `json:"grantOption,omitempty" webhook:"inmutable"`
 }
 
 // GrantStatus defines the observed state of Grant
 type GrantStatus struct {
+	// Conditions for the Grant object.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=status,xDescriptors={"urn:alm:descriptor:io.kubernetes.conditions"}
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
@@ -65,8 +76,9 @@ func (g *GrantStatus) SetCondition(condition metav1.Condition) {
 // +kubebuilder:printcolumn:name="GrantOpt",type="string",JSONPath=".spec.grantOption"
 // +kubebuilder:printcolumn:name="MariaDB",type="string",JSONPath=".spec.mariaDbRef.name"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +operator-sdk:csv:customresourcedefinitions:resources={{Grant,v1alpha1}}
 
-// Grant is the Schema for the grants API
+// Grant is the Schema for the grants API. It is used to define grants as if you were running a 'GRANT' statement.
 type Grant struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -87,6 +99,14 @@ func (g *Grant) MariaDBRef() *MariaDBRef {
 	return &g.Spec.MariaDBRef
 }
 
+func (d *Grant) RequeueInterval() *metav1.Duration {
+	return d.Spec.RequeueInterval
+}
+
+func (g *Grant) RetryInterval() *metav1.Duration {
+	return g.Spec.RetryInterval
+}
+
 func (g *Grant) AccountName() string {
 	return fmt.Sprintf("'%s'@'%s'", g.Spec.Username, g.HostnameOrDefault())
 }
@@ -98,6 +118,28 @@ func (g *Grant) HostnameOrDefault() string {
 	return "%"
 }
 
+// GrantUsernameFieldPath is the path related to the username field.
+const GrantUsernameFieldPath = ".spec.username"
+
+// IndexerFuncForFieldPath returns an indexer function for a given field path.
+func (g *Grant) IndexerFuncForFieldPath(fieldPath string) (client.IndexerFunc, error) {
+	switch fieldPath {
+	case GrantUsernameFieldPath:
+		return func(obj client.Object) []string {
+			grant, ok := obj.(*Grant)
+			if !ok {
+				return nil
+			}
+			if grant.Spec.Username != "" {
+				return []string{grant.Spec.Username}
+			}
+			return nil
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported field path: %s", fieldPath)
+	}
+}
+
 //+kubebuilder:object:root=true
 
 // GrantList contains a list of Grant
@@ -105,6 +147,15 @@ type GrantList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Grant `json:"items"`
+}
+
+// ListItems gets a copy of the Items slice.
+func (m *GrantList) ListItems() []ctrlclient.Object {
+	items := make([]ctrlclient.Object, len(m.Items))
+	for i, item := range m.Items {
+		items[i] = item.DeepCopy()
+	}
+	return items
 }
 
 func init() {

@@ -1,31 +1,19 @@
-/*
-Copyright 2022.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package v1alpha1
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
-	agentgalera "github.com/mariadb-operator/agent/pkg/galera"
+	"github.com/mariadb-operator/mariadb-operator/pkg/environment"
+	"github.com/mariadb-operator/mariadb-operator/pkg/galera/recovery"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 )
 
 // SST is the Snapshot State Transfer used when new Pods join the cluster.
@@ -69,22 +57,21 @@ func (s SST) MariaDBFormat() (string, error) {
 type PrimaryGalera struct {
 	// PodIndex is the StatefulSet index of the primary node. The user may change this field to perform a manual switchover.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	PodIndex *int `json:"podIndex,omitempty"`
 	// AutomaticFailover indicates whether the operator should automatically update PodIndex to perform an automatic primary failover.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch"}
 	AutomaticFailover *bool `json:"automaticFailover,omitempty"`
 }
 
-// FillWithDefaults fills the current PrimaryGalera object with DefaultGaleraSpec.
-// This enables having minimal PrimaryGalera objects and provides sensible defaults.
-func (r *PrimaryGalera) FillWithDefaults() {
+// SetDefaults sets reasonable defaults.
+func (r *PrimaryGalera) SetDefaults() {
 	if r.PodIndex == nil {
-		index := *DefaultGaleraSpec.Primary.PodIndex
-		r.PodIndex = &index
+		r.PodIndex = ptr.To(0)
 	}
 	if r.AutomaticFailover == nil {
-		failover := *DefaultGaleraSpec.Primary.AutomaticFailover
-		r.AutomaticFailover = &failover
+		r.AutomaticFailover = ptr.To(true)
 	}
 }
 
@@ -93,10 +80,12 @@ func (r *PrimaryGalera) FillWithDefaults() {
 type KubernetesAuth struct {
 	// Enabled is a flag to enable KubernetesAuth
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch"}
 	Enabled bool `json:"enabled,omitempty"`
 	// AuthDelegatorRoleName is the name of the ClusterRoleBinding that is associated with the "system:auth-delegator" ClusterRole.
 	// It is necessary for creating TokenReview objects in order for the agent to validate the service account token.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	AuthDelegatorRoleName string `json:"authDelegatorRoleName,omitempty"`
 }
 
@@ -115,36 +104,52 @@ func (k *KubernetesAuth) AuthDelegatorRoleNameOrDefault(mariadb *MariaDB) string
 }
 
 // GaleraAgent is a sidecar agent that co-operates with mariadb-operator.
-// More info: https://github.com/mariadb-operator/agent.
 type GaleraAgent struct {
-	// ContainerTemplate to be used in the agent container.
+	// ContainerTemplate defines a template to configure Container objects.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	ContainerTemplate `json:",inline"`
-	// Port to be used by the agent container
+	// Image name to be used by the MariaDB instances. The supported format is `<image>:<tag>`.
 	// +optional
-	Port *int32 `json:"port,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	Image string `json:"image,omitempty"`
+	// ImagePullPolicy is the image pull policy. One of `Always`, `Never` or `IfNotPresent`. If not defined, it defaults to `IfNotPresent`.
+	// +optional
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:imagePullPolicy"}
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+	// Port where the agent will be listening for connections.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	Port int32 `json:"port,omitempty"`
 	// KubernetesAuth to be used by the agent container
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	KubernetesAuth *KubernetesAuth `json:"kubernetesAuth,omitempty"`
 	// GracefulShutdownTimeout is the time we give to the agent container in order to gracefully terminate in-flight requests.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	GracefulShutdownTimeout *metav1.Duration `json:"gracefulShutdownTimeout,omitempty"`
 }
 
-// FillWithDefaults fills the current GaleraAgent object with DefaultReplicationSpec.
-// This enables having minimal GaleraAgent objects and provides sensible defaults.
-func (r *GaleraAgent) FillWithDefaults() {
-	if r.Port == nil {
-		port := DefaultGaleraSpec.Agent.Port
-		r.Port = port
+// SetDefaults sets reasonable defaults.
+func (r *GaleraAgent) SetDefaults(env *environment.OperatorEnv) {
+	if r.Image == "" {
+		r.Image = env.MariadbGaleraAgentImage
+	}
+	if r.ImagePullPolicy == "" {
+		r.ImagePullPolicy = corev1.PullIfNotPresent
+	}
+	if r.Port == 0 {
+		r.Port = 5555
 	}
 	if r.KubernetesAuth == nil {
-		auth := DefaultGaleraSpec.Agent.KubernetesAuth
-		r.KubernetesAuth = auth
+		r.KubernetesAuth = &KubernetesAuth{
+			Enabled: true,
+		}
 	}
 	if r.GracefulShutdownTimeout == nil {
-		timeout := DefaultGaleraSpec.Agent.GracefulShutdownTimeout
-		r.GracefulShutdownTimeout = timeout
+		r.GracefulShutdownTimeout = ptr.To(metav1.Duration{Duration: 1 * time.Second})
 	}
 }
 
@@ -153,171 +158,112 @@ func (r *GaleraAgent) FillWithDefaults() {
 type GaleraRecovery struct {
 	// Enabled is a flag to enable GaleraRecovery.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch"}
 	Enabled bool `json:"enabled"`
+	// MinClusterSize is the minimum number of replicas to consider the cluster healthy. It can be either a number of replicas (3) or a percentage (50%).
+	// If Galera consistently reports less replicas than this value for the given 'ClusterHealthyTimeout' interval, a cluster recovery is iniated.
+	// It defaults to '50%' of the replicas specified by the MariaDB object.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	MinClusterSize *intstr.IntOrString `json:"minClusterSize,omitempty"`
+	// ClusterMonitorInterval represents the interval used to monitor the Galera cluster health.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	ClusterMonitorInterval *metav1.Duration `json:"clusterMonitorInterval,omitempty"`
 	// ClusterHealthyTimeout represents the duration at which a Galera cluster, that consistently failed health checks,
 	// is considered unhealthy, and consequently the Galera recovery process will be initiated by the operator.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	ClusterHealthyTimeout *metav1.Duration `json:"clusterHealthyTimeout,omitempty"`
 	// ClusterBootstrapTimeout is the time limit for bootstrapping a cluster.
 	// Once this timeout is reached, the Galera recovery state is reset and a new cluster bootstrap will be attempted.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	ClusterBootstrapTimeout *metav1.Duration `json:"clusterBootstrapTimeout,omitempty"`
-	// PodRecoveryTimeout is the time limit for executing the recovery sequence within a Pod.
-	// This process includes enabling the recovery mode in the Galera configuration file, restarting the Pod
-	// and retrieving the sequence from a log file.
-	// +optional
-	PodRecoveryTimeout *metav1.Duration `json:"podRecoveryTimeout,omitempty"`
-	// PodSyncTimeout is the time limit we give to a Pod to reach the Sync state.
+	// PodRecoveryTimeout is the time limit for recevorying the sequence of a Pod during the cluster recovery.
 	// Once this timeout is reached, the Pod is restarted.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	PodRecoveryTimeout *metav1.Duration `json:"podRecoveryTimeout,omitempty"`
+	// PodSyncTimeout is the time limit for a Pod to join the cluster after having performed a cluster bootstrap during the cluster recovery.
+	// Once this timeout is reached, the Pod is restarted.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	PodSyncTimeout *metav1.Duration `json:"podSyncTimeout,omitempty"`
 }
 
-func (g *GaleraRecovery) FillWithDefaults() {
+// Validate determines whether a GaleraRecovery is valid.
+func (g *GaleraRecovery) Validate(mdb *MariaDB) error {
+	if !g.Enabled || g.MinClusterSize == nil {
+		return nil
+	}
+	_, err := intstr.GetScaledValueFromIntOrPercent(g.MinClusterSize, 0, false)
+	if err != nil {
+		return err
+	}
+	if g.MinClusterSize.Type == intstr.Int {
+		minClusterSize := g.MinClusterSize.IntValue()
+		if minClusterSize < 0 || minClusterSize > int(mdb.Spec.Replicas) {
+			return fmt.Errorf("'spec.galera.recovery.minClusterSize' out of 'spec.replicas' bounds: %d", minClusterSize)
+		}
+	}
+	return nil
+}
+
+// SetDefaults sets reasonable defaults.
+func (g *GaleraRecovery) SetDefaults(mdb *MariaDB) {
+	if g.MinClusterSize == nil {
+		g.MinClusterSize = ptr.To(intstr.FromString("50%"))
+	}
+	if g.ClusterMonitorInterval == nil {
+		g.ClusterMonitorInterval = ptr.To(metav1.Duration{Duration: 10 * time.Second})
+	}
 	if g.ClusterHealthyTimeout == nil {
-		timeout := DefaultGaleraSpec.Recovery.ClusterHealthyTimeout
-		g.ClusterHealthyTimeout = timeout
+		g.ClusterHealthyTimeout = ptr.To(metav1.Duration{Duration: 30 * time.Second})
 	}
 	if g.ClusterBootstrapTimeout == nil {
-		timeout := DefaultGaleraSpec.Recovery.ClusterBootstrapTimeout
-		g.ClusterBootstrapTimeout = timeout
+		g.ClusterBootstrapTimeout = ptr.To(metav1.Duration{Duration: 10 * time.Minute})
 	}
 	if g.PodRecoveryTimeout == nil {
-		timeout := DefaultGaleraSpec.Recovery.PodRecoveryTimeout
-		g.PodRecoveryTimeout = timeout
+		g.PodRecoveryTimeout = ptr.To(metav1.Duration{Duration: 3 * time.Minute})
 	}
 	if g.PodSyncTimeout == nil {
-		timeout := DefaultGaleraSpec.Recovery.PodSyncTimeout
-		g.PodSyncTimeout = timeout
+		g.PodSyncTimeout = ptr.To(metav1.Duration{Duration: 3 * time.Minute})
 	}
 }
 
-// Galera allows you to enable multi-master HA via Galera in your MariaDB cluster.
-type Galera struct {
-	// GaleraSpec is the Galera desired state specification.
-	// +optional
-	GaleraSpec `json:",inline"`
-	// Enabled is a flag to enable Galera.
-	// +optional
-	Enabled bool `json:"enabled,omitempty"`
+// HasMinClusterSize returns whether the current cluster has the minimum number of replicas. If not, a cluster recovery will be performed.
+func (g *GaleraRecovery) HasMinClusterSize(currentSize int, mdb *MariaDB) (bool, error) {
+	minClusterSize := ptr.Deref(g.MinClusterSize, intstr.FromString("50%"))
+	scaled, err := intstr.GetScaledValueFromIntOrPercent(&minClusterSize, int(mdb.Spec.Replicas), true)
+	if err != nil {
+		return false, err
+	}
+	return currentSize >= scaled, nil
 }
 
-// GaleraSpec is the Galera desired state specification.
-type GaleraSpec struct {
-	// Primary is the Galera configuration for the primary node.
+// GaleraConfig defines storage options for the Galera configuration files.
+type GaleraConfig struct {
+	// ReuseStorageVolume indicates that storage volume used by MariaDB should be reused to store the Galera configuration files.
+	// It defaults to false, which implies that a dedicated volume for the Galera configuration files is provisioned.
 	// +optional
-	Primary *PrimaryGalera `json:"primary,omitempty"`
-	// SST is the Snapshot State Transfer used when new Pods join the cluster.
-	// More info: https://galeracluster.com/library/documentation/sst.html.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch"}
+	ReuseStorageVolume *bool `json:"reuseStorageVolume,omitempty" webhook:"inmutableinit"`
+	// VolumeClaimTemplate is a template for the PVC that will contain the Galera configuration files shared between the InitContainer, Agent and MariaDB.
 	// +optional
-	SST *SST `json:"sst,omitempty"`
-	// ReplicaThreads is the number of replica threads used to apply Galera write sets in parallel.
-	// More info: https://mariadb.com/kb/en/galera-cluster-system-variables/#wsrep_slave_threads.
-	// +optional
-	ReplicaThreads *int `json:"replicaThreads,omitempty"`
-	// GaleraAgent is a sidecar agent that co-operates with mariadb-operator.
-	// More info: https://github.com/mariadb-operator/agent.
-	// +optional
-	Agent *GaleraAgent `json:"agent,omitempty"`
-	// GaleraRecovery is the recovery process performed by the operator whenever the Galera cluster is not healthy.
-	// More info: https://galeracluster.com/library/documentation/crash-recovery.html.
-	// +optional
-	Recovery *GaleraRecovery `json:"recovery,omitempty"`
-	// InitContainer is an init container that co-operates with mariadb-operator.
-	// More info: https://github.com/mariadb-operator/init.
-	// +optional
-	InitContainer *ContainerTemplate `json:"initContainer,omitempty"`
-	// VolumeClaimTemplate is a template for the PVC that will contain the Galera configuration files
-	// shared between the InitContainer, Agent and MariaDB.
-	// +optional
-	VolumeClaimTemplate *VolumeClaimTemplate `json:"volumeClaimTemplate,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	VolumeClaimTemplate *VolumeClaimTemplate `json:"volumeClaimTemplate,omitempty" webhook:"inmutableinit"`
 }
 
-// FillWithDefaults fills the current GaleraSpec object with DefaultGaleraSpec.
-// This enables having minimal GaleraSpec objects and provides sensible defaults.
-func (g *GaleraSpec) FillWithDefaults() {
-	if g.Primary == nil {
-		primary := *DefaultGaleraSpec.Primary
-		g.Primary = &primary
-	} else {
-		g.Primary.FillWithDefaults()
+// SetDefaults sets reasonable defaults.
+func (g *GaleraConfig) SetDefaults() {
+	if g.ReuseStorageVolume == nil {
+		g.ReuseStorageVolume = ptr.To(false)
 	}
-	if g.SST == nil {
-		sst := *DefaultGaleraSpec.SST
-		g.SST = &sst
-	}
-	if g.ReplicaThreads == nil {
-		replicaThreads := *DefaultGaleraSpec.ReplicaThreads
-		g.ReplicaThreads = &replicaThreads
-	}
-	if g.Agent == nil {
-		agent := *DefaultGaleraSpec.Agent
-		g.Agent = &agent
-	} else {
-		g.Agent.FillWithDefaults()
-	}
-	if g.Recovery == nil {
-		recovery := *DefaultGaleraSpec.Recovery
-		g.Recovery = &recovery
-	} else {
-		g.Recovery.FillWithDefaults()
-	}
-	if g.InitContainer == nil {
-		initContainer := *DefaultGaleraSpec.InitContainer
-		g.InitContainer = &initContainer
-	}
-	if g.VolumeClaimTemplate == nil {
-		volumeClaimTemplate := *DefaultGaleraSpec.VolumeClaimTemplate
-		g.VolumeClaimTemplate = &volumeClaimTemplate
-	}
-}
-
-var (
-	fiveSeconds    = metav1.Duration{Duration: 5 * time.Second}
-	fiveMinutes    = metav1.Duration{Duration: 5 * time.Minute}
-	tenMinutes     = metav1.Duration{Duration: 10 * time.Minute}
-	sst            = SSTMariaBackup
-	replicaThreads = 1
-
-	// DefaultGaleraSpec provides sensible defaults for the GaleraSpec.
-	DefaultGaleraSpec = GaleraSpec{
-		Primary: &PrimaryGalera{
-			PodIndex:          func() *int { i := 0; return &i }(),
-			AutomaticFailover: func() *bool { af := true; return &af }(),
-		},
-		SST:            &sst,
-		ReplicaThreads: &replicaThreads,
-		Agent: &GaleraAgent{
-			ContainerTemplate: ContainerTemplate{
-				Image: Image{
-					Repository: "ghcr.io/mariadb-operator/agent",
-					Tag:        "v0.0.2",
-					PullPolicy: corev1.PullIfNotPresent,
-				},
-			},
-			Port: func() *int32 { p := int32(5555); return &p }(),
-			KubernetesAuth: &KubernetesAuth{
-				Enabled: true,
-			},
-			GracefulShutdownTimeout: &fiveSeconds,
-		},
-		Recovery: &GaleraRecovery{
-			Enabled:                 true,
-			ClusterHealthyTimeout:   &fiveMinutes,
-			ClusterBootstrapTimeout: &tenMinutes,
-			PodRecoveryTimeout:      &fiveMinutes,
-			PodSyncTimeout:          &tenMinutes,
-		},
-		InitContainer: &ContainerTemplate{
-			Image: Image{
-				Repository: "ghcr.io/mariadb-operator/init",
-				Tag:        "v0.0.5",
-				PullPolicy: corev1.PullIfNotPresent,
-			},
-		},
-		VolumeClaimTemplate: &VolumeClaimTemplate{
+	if !ptr.Deref(g.ReuseStorageVolume, false) && g.VolumeClaimTemplate == nil {
+		g.VolumeClaimTemplate = &VolumeClaimTemplate{
 			PersistentVolumeClaimSpec: corev1.PersistentVolumeClaimSpec{
-				Resources: corev1.ResourceRequirements{
+				Resources: corev1.VolumeResourceRequirements{
 					Requests: corev1.ResourceList{
 						"storage": resource.MustParse("100Mi"),
 					},
@@ -326,12 +272,116 @@ var (
 					corev1.ReadWriteOnce,
 				},
 			},
-		},
+		}
 	}
-)
+}
 
-// GaleraRecoveryBootstrap indicates when and in which Pod the cluster bootstrap process has been performed.
-type GaleraRecoveryBootstrap struct {
+// Galera allows you to enable multi-master HA via Galera in your MariaDB cluster.
+type Galera struct {
+	// GaleraSpec is the Galera desired state specification.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	GaleraSpec `json:",inline"`
+	// Enabled is a flag to enable Galera.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch"}
+	Enabled bool `json:"enabled,omitempty"`
+}
+
+// SetDefaults sets reasonable defaults.
+func (g *Galera) SetDefaults(mdb *MariaDB, env *environment.OperatorEnv) {
+	if g.SST == "" {
+		g.SST = SSTMariaBackup
+	}
+	if g.AvailableWhenDonor == nil {
+		g.AvailableWhenDonor = ptr.To(false)
+	}
+	if g.GaleraLibPath == "" {
+		g.GaleraLibPath = env.MariadbGaleraLibPath
+	}
+	if g.ReplicaThreads == 0 {
+		g.ReplicaThreads = 1
+	}
+	if reflect.ValueOf(g.InitContainer).IsZero() {
+		g.InitContainer = Container{
+			Image:           env.MariadbGaleraInitImage,
+			ImagePullPolicy: corev1.PullIfNotPresent,
+		}
+	}
+	g.Primary.SetDefaults()
+	g.Agent.SetDefaults(env)
+	g.Config.SetDefaults()
+
+	if g.Recovery == nil {
+		g.Recovery = &GaleraRecovery{
+			Enabled: true,
+		}
+	}
+	if ptr.Deref(g.Recovery, GaleraRecovery{}).Enabled {
+		g.Recovery.SetDefaults(mdb)
+	}
+
+	if g.InitJob != nil {
+		g.InitJob.SetDefaults(mdb.ObjectMeta)
+	}
+}
+
+// GaleraSpec is the Galera desired state specification.
+type GaleraSpec struct {
+	// Primary is the Galera configuration for the primary node.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	Primary PrimaryGalera `json:"primary,omitempty"`
+	// SST is the Snapshot State Transfer used when new Pods join the cluster.
+	// More info: https://galeracluster.com/library/documentation/sst.html.
+	// +optional
+	// +kubebuilder:validation:Enum=rsync;mariabackup;mysqldump
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	SST SST `json:"sst,omitempty"`
+	// AvailableWhenDonor indicates whether a donor node should be responding to queries. It defaults to false.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch","urn:alm:descriptor:com.tectonic.ui:advanced"}
+	AvailableWhenDonor *bool `json:"availableWhenDonor,omitempty"`
+	// GaleraLibPath is a path inside the MariaDB image to the wsrep provider plugin. It is defaulted if not provided.
+	// More info: https://galeracluster.com/library/documentation/mysql-wsrep-options.html#wsrep-provider.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	GaleraLibPath string `json:"galeraLibPath,omitempty"`
+	// ReplicaThreads is the number of replica threads used to apply Galera write sets in parallel.
+	// More info: https://mariadb.com/kb/en/galera-cluster-system-variables/#wsrep_slave_threads.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	ReplicaThreads int `json:"replicaThreads,omitempty"`
+	// ProviderOptions is map of Galera configuration parameters.
+	// More info: https://mariadb.com/kb/en/galera-cluster-system-variables/#wsrep_provider_options.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	ProviderOptions map[string]string `json:"providerOptions,omitempty"`
+	// GaleraAgent is a sidecar agent that co-operates with mariadb-operator.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	Agent GaleraAgent `json:"agent,omitempty"`
+	// GaleraRecovery is the recovery process performed by the operator whenever the Galera cluster is not healthy.
+	// More info: https://galeracluster.com/library/documentation/crash-recovery.html.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	Recovery *GaleraRecovery `json:"recovery,omitempty"`
+	// InitContainer is an init container that co-operates with mariadb-operator.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	InitContainer Container `json:"initContainer,omitempty"`
+	// InitJob defines additional properties for the Job used to perform the initialization.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	InitJob *Job `json:"initJob,omitempty"`
+	// GaleraConfig defines storage options for the Galera configuration files.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	Config GaleraConfig `json:"config,omitempty"`
+}
+
+// GaleraBootstrapStatus indicates when and in which Pod the cluster bootstrap process has been performed.
+type GaleraBootstrapStatus struct {
 	Time *metav1.Time `json:"time,omitempty"`
 	Pod  *string      `json:"pod,omitempty"`
 }
@@ -339,11 +389,13 @@ type GaleraRecoveryBootstrap struct {
 // GaleraRecoveryStatus is the current state of the Galera recovery process.
 type GaleraRecoveryStatus struct {
 	// State is a per Pod representation of the Galera state file (grastate.dat).
-	State map[string]*agentgalera.GaleraState `json:"state,omitempty"`
+	State map[string]*recovery.GaleraState `json:"state,omitempty"`
 	// State is a per Pod representation of the sequence recovery process.
-	Recovered map[string]*agentgalera.Bootstrap `json:"recovered,omitempty"`
+	Recovered map[string]*recovery.Bootstrap `json:"recovered,omitempty"`
 	// Bootstrap indicates when and in which Pod the cluster bootstrap process has been performed.
-	Bootstrap *GaleraRecoveryBootstrap `json:"bootstrap,omitempty"`
+	Bootstrap *GaleraBootstrapStatus `json:"bootstrap,omitempty"`
+	// PodsRestarted that the Pods have been restarted after the cluster bootstrap.
+	PodsRestarted *bool `json:"podsRestarted,omitempty"`
 }
 
 // HasGaleraReadyCondition indicates whether the MariaDB object has a GaleraReady status condition.

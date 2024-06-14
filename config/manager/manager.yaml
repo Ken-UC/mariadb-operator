@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: mariadb-system
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: deployment
+    app.kubernetes.io/instance: controller-manager
+    app.kubernetes.io/component: manager
+    app.kubernetes.io/created-by: mariadb-operator
+    app.kubernetes.io/part-of: mariadb-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  selector:
+    matchLabels:
+      control-plane: mariadb-operator-controller-manager
+  replicas: 1
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: mariadb-operator-enterprise
+      labels:
+        control-plane: mariadb-operator-controller-manager
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - args:
+            - --leader-elect
+            - --webhook-cert-dir=/tmp/k8s-webhook-server/serving-certs
+            - --webhook-port=9443
+          image: controller:latest
+          name: mariadb-operator-enterprise
+          ports:
+            - containerPort: 9443
+              protocol: TCP
+              name: https
+            - containerPort: 8080
+              protocol: TCP
+              name: metrics
+            - containerPort: 8081
+              protocol: TCP
+              name: health
+          env:
+            - name: RELATED_IMAGE_MARIADB
+              value: mariadbmmontes/enterprise-server:10.6
+            - name: RELATED_IMAGE_MAXSCALE
+              value: docker-registry2.mariadb.com/mariadb/maxscale:23.08.5-ubi
+            - name: RELATED_IMAGE_EXPORTER
+              value: docker-registry2.mariadb.com/mariadb/mariadb-prometheus-exporter-ubi:v0.0.1
+            - name: RELATED_IMAGE_EXPORTER_MAXSCALE
+              value: docker-registry2.mariadb.com/mariadb/maxscale-prometheus-exporter-ubi:v0.0.1
+            - name: MARIADB_OPERATOR_IMAGE
+              value: docker-registry2.mariadb.com/mariadb/mariadb-operator-enterprise:v0.0.29
+            - name: MARIADB_GALERA_INIT_IMAGE
+              value: docker-registry2.mariadb.com/mariadb/mariadb-operator-enterprise:v0.0.29
+            - name: MARIADB_GALERA_AGENT_IMAGE
+              value: docker-registry2.mariadb.com/mariadb/mariadb-operator-enterprise:v0.0.29
+            - name: MARIADB_GALERA_LIB_PATH
+              value: /usr/lib64/galera/libgalera_smm.so
+            - name: WATCH_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['olm.targetNamespaces']
+            - name: MARIADB_OPERATOR_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+            - name: MARIADB_OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: MARIADB_OPERATOR_SA_PATH
+              value: /var/run/secrets/kubernetes.io/serviceaccount/token
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - "ALL"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              memory: 2Gi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+      serviceAccountName: mariadb-operator-manager
+      terminationGracePeriodSeconds: 10

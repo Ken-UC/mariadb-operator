@@ -3,10 +3,12 @@ package sql
 import (
 	"context"
 	"fmt"
+	"time"
 
-	mariadbclient "github.com/mariadb-operator/mariadb-operator/pkg/client"
 	"github.com/mariadb-operator/mariadb-operator/pkg/refresolver"
+	sqlClient "github.com/mariadb-operator/mariadb-operator/pkg/sql"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -15,14 +17,24 @@ type SqlFinalizer struct {
 	RefResolver *refresolver.RefResolver
 
 	WrappedFinalizer WrappedFinalizer
+
+	SqlOptions
 }
 
-func NewSqlFinalizer(client client.Client, wf WrappedFinalizer) Finalizer {
-	return &SqlFinalizer{
+func NewSqlFinalizer(client client.Client, wf WrappedFinalizer, opts ...SqlOpt) Finalizer {
+	finalizer := &SqlFinalizer{
 		Client:           client,
 		RefResolver:      refresolver.New(client),
 		WrappedFinalizer: wf,
+		SqlOptions: SqlOptions{
+			RequeueInterval: 30 * time.Second,
+			LogSql:          false,
+		},
 	}
+	for _, setOpt := range opts {
+		setOpt(&finalizer.SqlOptions)
+	}
+	return finalizer
 }
 
 func (tf *SqlFinalizer) AddFinalizer(ctx context.Context) error {
@@ -35,39 +47,39 @@ func (tf *SqlFinalizer) AddFinalizer(ctx context.Context) error {
 	return nil
 }
 
-func (tf *SqlFinalizer) Finalize(ctx context.Context, resource Resource) error {
+func (tf *SqlFinalizer) Finalize(ctx context.Context, resource Resource) (ctrl.Result, error) {
 	if !tf.WrappedFinalizer.ContainsFinalizer() {
-		return nil
+		return ctrl.Result{}, nil
 	}
 
 	mariadb, err := tf.RefResolver.MariaDB(ctx, resource.MariaDBRef(), resource.GetNamespace())
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			if err := tf.WrappedFinalizer.RemoveFinalizer(ctx); err != nil {
-				return fmt.Errorf("error removing %s finalizer: %v", resource.GetName(), err)
+				return ctrl.Result{}, fmt.Errorf("error removing %s finalizer: %v", resource.GetName(), err)
 			}
-			return nil
+			return ctrl.Result{}, nil
 		}
-		return fmt.Errorf("error getting MariaDB: %v", err)
+		return ctrl.Result{}, fmt.Errorf("error getting MariaDB: %v", err)
 	}
 
-	if err := waitForMariaDB(ctx, tf.Client, resource, mariadb); err != nil {
-		return fmt.Errorf("error waiting for MariaDB: %v", err)
+	if result, err := waitForMariaDB(ctx, tf.Client, mariadb, tf.LogSql); !result.IsZero() || err != nil {
+		return result, err
 	}
 
 	// TODO: connection pooling. See https://github.com/mariadb-operator/mariadb-operator/issues/7.
-	mdbClient, err := mariadbclient.NewClientWithMariaDB(ctx, mariadb, tf.RefResolver)
+	mdbClient, err := sqlClient.NewClientWithMariaDB(ctx, mariadb, tf.RefResolver)
 	if err != nil {
-		return fmt.Errorf("error connecting to MariaDB: %v", err)
+		return ctrl.Result{}, fmt.Errorf("error connecting to MariaDB: %v", err)
 	}
 	defer mdbClient.Close()
 
 	if err := tf.WrappedFinalizer.Reconcile(ctx, mdbClient); err != nil {
-		return fmt.Errorf("error reconciling in TemplateFinalizer: %v", err)
+		return ctrl.Result{}, fmt.Errorf("error reconciling in TemplateFinalizer: %v", err)
 	}
 
 	if err := tf.WrappedFinalizer.RemoveFinalizer(ctx); err != nil {
-		return fmt.Errorf("error removing finalizer in TemplateFinalizer: %v", err)
+		return ctrl.Result{}, fmt.Errorf("error removing finalizer in TemplateFinalizer: %v", err)
 	}
-	return nil
+	return ctrl.Result{}, nil
 }

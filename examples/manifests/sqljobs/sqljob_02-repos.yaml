@@ -1,0 +1,28 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: SqlJob
+metadata:
+  name: 02-repos
+spec:
+  dependsOn:
+    - name: 01-users
+  mariaDbRef:
+    name: mariadb
+  username: mariadb
+  passwordSecretKeyRef:
+    name: mariadb
+    key: password
+  database: mariadb
+  sql: |
+    CREATE TABLE IF NOT EXISTS repos (
+      id bigint PRIMARY KEY AUTO_INCREMENT,
+      name varchar(255) NOT NULL,
+      owner_id bigint NOT NULL,
+      UNIQUE KEY name__unique_idx (name),
+      FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    INSERT INTO repos(name, owner_id) VALUES('mariadb-operator', (SELECT id FROM users WHERE username = 'mmontes11'))
+      ON DUPLICATE KEY UPDATE id=id;
+    INSERT INTO repos(name, owner_id) VALUES('mariadb-operator-helm', (SELECT id FROM users WHERE username = 'mmontes11'))
+      ON DUPLICATE KEY UPDATE id=id;
+    INSERT INTO repos(name, owner_id) VALUES('mariadb-ha-poc', (SELECT id FROM users WHERE username = 'mmontes11'))
+      ON DUPLICATE KEY UPDATE id=id;

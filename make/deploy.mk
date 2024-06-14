@@ -1,41 +1,10 @@
 HELM_DIR ?= deploy/charts/mariadb-operator
 CLUSTER ?= mdb
 
-##@ Docker
-
-PLATFORM ?= linux/amd64,linux/arm64
-IMG ?= ghcr.io/mariadb-operator/mariadb-operator:v0.0.20
-BUILDX ?= docker buildx build --platform $(PLATFORM) -t $(IMG) 
-BUILDER ?= mariadb-operator
-
-.PHONY: docker-builder
-docker-builder: ## Configure docker builder.
-	docker buildx create --name $(BUILDER) --use --platform $(PLATFORM)
-
-.PHONY: docker-build
-docker-build: ## Build docker image.
-	docker build -t $(IMG) .  
-
-.PHONY: docker-buildx
-docker-buildx: ## Build multi-arch docker image.
-	$(BUILDX) .
-
-.PHONY: docker-push
-docker-push: ## Build multi-arch docker image and push it to the registry.
-	$(BUILDX) --push .
-
-.PHONY: docker-inspect
-docker-inspect: ## Inspect docker image.
-	docker buildx imagetools inspect $(IMG)
-
-.PHONY: docker-load
-docker-load: ## Load docker image in KIND.
-	$(KIND) load docker-image --name ${CLUSTER} ${IMG}
-
 ##@ Cluster
 
 KIND_CONFIG ?= hack/config/kind.yaml
-KIND_IMAGE ?= kindest/node:v1.27.3
+KIND_IMAGE ?= kindest/node:v1.29.2
 
 .PHONY: cluster
 cluster: kind ## Create a single node kind cluster.
@@ -50,8 +19,8 @@ cluster-delete: kind ## Delete the kind cluster.
 	$(KIND) delete cluster --name $(CLUSTER)
 
 .PHONY: cluster-ctx
-cluster-ctx: ## Sets cluster context.
-	@kubectl config use-context kind-$(CLUSTER)
+cluster-ctx: kubectl ## Sets cluster context.
+	$(KUBECTL) config use-context kind-$(CLUSTER)
 
 .PHONY: cluster-ls
 cluster-ps: ## List all cluster Nodes.
@@ -61,7 +30,33 @@ cluster-ps: ## List all cluster Nodes.
 cluster-workers: ## List cluster worker Nodes.
 	docker ps --filter="name=$(CLUSTER)-worker-*"
 
-##@ DR
+.PHONY: cluster-nodes
+cluster-nodes: kind ## Get cluster nodes.
+	@$(KIND) get nodes --name $(CLUSTER)
+
+.PHONY: stop-control-plane
+stop-control-plane: ## Stop control-plane Node.
+	docker stop $(CLUSTER)-control-plane
+
+.PHONY: start-control-plane
+start-control-plane: ## Start control-plane Node.
+	docker start $(CLUSTER)-control-plane
+
+##@ Registry
+
+.PHONY: registry
+registry: ## Configure registry auth.
+	@for node in $$(make -s cluster-nodes); do \
+		docker cp $(DOCKER_CONFIG) $$node:/var/lib/kubelet/config.json; \
+	done
+
+REGISTRY_PULL_SECRET ?= registry
+.PHONY: registry-secret
+registry-secret: ## Configure registry pull secret.
+	@$(KUBECTL) create secret docker-registry $(REGISTRY_PULL_SECRET) --from-file=.dockerconfigjson=$(DOCKER_CONFIG) --dry-run=client -o yaml \
+		| $(KUBECTL) apply -f -
+
+##@ Failover
 
 MARIADB_INSTANCE ?= mariadb-galera
 
@@ -81,100 +76,48 @@ start-all-mariadb: ## Stop all mariadb Nodes
 	@for ((i=0; i<$(shell kubectl get mariadb "$(MARIADB_INSTANCE)" -o jsonpath='{.spec.replicas}'); i++)); do make -s "start-mariadb-$$i"; done
 	@make -s cluster-workers
 
-##@ Controller gen
-
-.PHONY: manifests
-manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN) rbac:roleName=mariadb-manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
-
-.PHONY: code
-code: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
-	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
+POD ?= mariadb-repl-0
+.PHONY: delete-pod
+delete-pod: ## Continiously delete a Pod.
+	@while true; do kubectl delete pod $(POD); sleep 1; done;
 
 ##@ Helm
-
-.PHONY: helm-crds 
-helm-crds: kustomize ## Generate CRDs for Helm chart.
-	$(KUSTOMIZE) build config/crd > deploy/charts/mariadb-operator/crds/crds.yaml
-
-DOCS_IMG ?= jnorwood/helm-docs:v1.11.0
-.PHONY: helm-docs
-helm-docs: ## Generate Helm chart docs.
-	docker run --rm -v $(shell pwd)/$(HELM_DIR):/helm-docs -u $(shell id -u) $(DOCS_IMG)
 
 CT_IMG ?= quay.io/helmpack/chart-testing:v3.5.0 
 .PHONY: helm-lint
 helm-lint: ## Lint Helm charts.
 	docker run --rm --workdir /repo -v $(shell pwd):/repo $(CT_IMG) ct lint --config .github/config/ct.yml 
 
-.PHONY: helm
-helm: helm-crds helm-docs ## Generate manifests for Helm chart.
-
 .PHONY: helm-chart-version
 helm-chart-version: yq ## Get helm chart version.
 	@cat $(HELM_DIR)/Chart.yaml | $(YQ) e ".version"
 
-##@ Bundle
+##@ Install
 
-BUNDLE_CRDS_DIR ?= deploy/crds
-.PHONY: bundle-crds
-bundle-crds: manifests kustomize ## Generate CRDs bundle.
-	mkdir -p $(BUNDLE_CRDS_DIR)
-	$(KUSTOMIZE) build config/crd > $(BUNDLE_CRDS_DIR)/crds.yaml
+PROMETHEUS_VERSION ?= "58.3.1"
 
-BUNDLE_MANIFESTS_DIR ?= deploy/manifests
-
-BUNDLE_VALUES ?= deploy/manifests/helm-values.yaml 
-.PHONY: bundle-manifests
-bundle-manifests: manifests bundle-crds ## Generate manifests bundle.
-	mkdir -p $(BUNDLE_MANIFESTS_DIR)
-	cat $(BUNDLE_CRDS_DIR)/crds.yaml > $(BUNDLE_MANIFESTS_DIR)/manifests.yaml
-	helm template -n default mariadb-operator $(HELM_DIR) -f $(BUNDLE_VALUES) >> $(BUNDLE_MANIFESTS_DIR)/manifests.yaml
-
-BUNDLE_MIN_VALUES ?= deploy/manifests/helm-values.min.yaml 
-.PHONY: bundle-min-manifests
-bundle-min-manifests: manifests bundle-crds ## Generate minimal manifests bundle.
-	mkdir -p $(BUNDLE_MANIFESTS_DIR)
-	cat $(BUNDLE_CRDS_DIR)/crds.yaml > $(BUNDLE_MANIFESTS_DIR)/manifests.min.yaml
-	helm template -n default mariadb-operator $(HELM_DIR) -f $(BUNDLE_MIN_VALUES) >> $(BUNDLE_MANIFESTS_DIR)/manifests.min.yaml
-
-.PHONY: bundle
-bundle: bundle-crds bundle-manifests bundle-min-manifests ## Generate bundles.
-
-##@ Generate
-
-.PHONY: generate
-generate: manifests code helm bundle ## Generate manifests, code, helm chart and manifests bundle.
-
-.PHONY: gen
-gen: generate ## Generate alias.
-
-##@ Dependencies
-
-PROMETHEUS_VERSION ?= kube-prometheus-stack-33.2.0
 .PHONY: install-prometheus-crds
 install-prometheus-crds: cluster-ctx  ## Install Prometheus CRDs.
-	kubectl apply -f https://raw.githubusercontent.com/prometheus-community/helm-charts/$(PROMETHEUS_VERSION)/charts/kube-prometheus-stack/crds/crd-servicemonitors.yaml
+	kubectl apply -f https://raw.githubusercontent.com/prometheus-community/helm-charts/kube-prometheus-stack-$(PROMETHEUS_VERSION)/charts/kube-prometheus-stack/charts/crds/crds/crd-servicemonitors.yaml
 
 .PHONY: install-prometheus
 install-prometheus: cluster-ctx ## Install kube-prometheus-stack helm chart.
-	@./hack/install_prometheus.sh
+	@PROMETHEUS_VERSION=$(PROMETHEUS_VERSION) ./hack/install_prometheus.sh
 
-CERT_MANAGER_VERSION ?= "v1.9.1"
+CERT_MANAGER_VERSION ?= "v1.14.5"
 .PHONY: install-cert-manager
 install-cert-manager: cluster-ctx ## Install cert-manager helm chart.
-	@./hack/install_cert_manager.sh
+	@CERT_MANAGER_VERSION=$(CERT_MANAGER_VERSION) ./hack/install_cert_manager.sh
 
-METALLB_VERSION ?= "0.13.9"
+METALLB_VERSION ?= "0.14.5"
 .PHONY: install-metallb
 install-metallb: cluster-ctx ## Install metallb helm chart.
-	@./hack/install_metallb.sh
+	@METALLB_VERSION=$(METALLB_VERSION) ./hack/install_metallb.sh
 
-##@ Install
-
-ifndef ignore-not-found
-  ignore-not-found = false
-endif
+MINIO_VERSION ?= "5.2.0"
+.PHONY: install-minio
+install-minio: cert-minio ## Install minio helm chart.
+	@MINIO_VERSION=$(MINIO_VERSION) ./hack/install_minio.sh
 
 .PHONY: install-crds
 install-crds: cluster-ctx manifests kustomize ## Install CRDs.
@@ -184,16 +127,62 @@ install-crds: cluster-ctx manifests kustomize ## Install CRDs.
 uninstall-crds: cluster-ctx manifests kustomize ## Uninstall CRDs.
 	$(KUSTOMIZE) build config/crd | kubectl delete --ignore-not-found=$(ignore-not-found) -f -
 
-.PHONY: install
-install: cluster-ctx install-crds install-prometheus-crds install-samples serviceaccount certs ## Install CRDs and dependencies for local development.
-
-.PHONY: install-samples
-install-samples: cluster-ctx  ## Install sample configuration.
+.PHONY: install-config
+install-config: cluster-ctx  ## Install common configuration.
 	kubectl apply -f examples/manifests/config
 
 .PHONY: serviceaccount
 serviceaccount: cluster-ctx  ## Create long-lived ServiceAccount token for development.
 	@./hack/create_serviceaccount.sh
+
+.PHONY: serviceaccount-token
+serviceaccount-get: cluster-ctx ## Get ServiceAccount token for development.
+	$(KUBECTL) get secret mariadb-operator -o jsonpath="{.data.token}" | base64 -d
+
+.PHONY: storageclass
+storageclass: cluster-ctx  ## Create StorageClass that allows volume expansion.
+	$(KUBECTL) apply -f ./hack/manifests/storageclass.yaml
+
+.PHONY: install
+install: cluster-ctx install-crds install-config install-prometheus-crds serviceaccount storageclass cert docker-dev ## Install everything you need for local development.
+
+.PHONY: install-ent
+install-ent: cluster-ctx install-crds install-config install-prometheus-crds serviceaccount storageclass cert docker-dev-ent ## Install everything you need for local enterprise development.
+
+##@ Deploy
+
+.PHONY: deploy-ent
+deploy-ent: manifests kustomize cluster-ctx ## Deploy enterprise controller.
+	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG_ENT}
+	$(KUSTOMIZE) build config/default | $(KUBECTL) apply --server-side=true -f -
+
+.PHONY: undeploy-ent
+undeploy-ent: cluster-ctx ## Undeploy enterprise controller.
+	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
+
+##@ Sysbench
+
+.PHONY: sysbench-prepare-repl
+sysbench-prepare-repl: ## Prepare sysbench tests for replication.
+	$(KUBECTL) apply -f ./hack/manifests/sysbench/replication/sbtest-repl_database.yaml
+	$(KUBECTL) wait --for=condition=ready database sbtest-repl
+	$(KUBECTL) apply -f ./hack/manifests/sysbench/replication/sysbench-prepare-repl_job.yaml
+
+.PHONY: sysbench-repl
+sysbench-repl: ## Run sysbench tests for replication.
+	$(KUBECTL) apply -f ./hack/manifests/sysbench/replication/sysbench-repl_cronjob.yaml
+	$(KUBECTL) create job sysbench-repl --from cronjob/sysbench-repl
+
+.PHONY: sysbench-prepare-galera
+sysbench-prepare-galera: ## Prepare sysbench tests for Galera.
+	$(KUBECTL) apply -f ./hack/manifests/sysbench/galera/sbtest-galera_database.yaml
+	$(KUBECTL) wait --for=condition=ready database sbtest-galera
+	$(KUBECTL) apply -f ./hack/manifests/sysbench/galera/sysbench-prepare-galera_job.yaml
+
+.PHONY: sysbench-galera
+sysbench-galera: ## Run sysbench tests for Galera.
+	$(KUBECTL) apply -f ./hack/manifests/sysbench/galera/sysbench-galera_cronjob.yaml
+	$(KUBECTL) create job sysbench-galera --from cronjob/sysbench-galera
 
 ##@ Examples
 
@@ -203,7 +192,7 @@ GITHUB_BRANCH ?= main
 
 .PHONY: example-flux
 example-flux: flux ## Install flux example.
-	flux bootstrap github \
+	$(FLUX) bootstrap github \
 		--owner=$(GITHUB_USER) \
 		--repository=$(GITHUB_REPOSITORY)\
 		--branch=$(GITHUB_BRANCH) \

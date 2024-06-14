@@ -1,8 +1,22 @@
 # Development guide
 
-In this guide, we will be configuring a local environment to run `mariadb-operator` so you can develop and test features without hassle. The local `mariadb-operator` will be able to resolve DNS and connect to MariaDB as if it was running inside a Kubernetes cluster. 
+In this guide, we will be configuring a local environment to run `mariadb-operator` so you can develop and test features without hassle. The local `mariadb-operator` will be able to resolve DNS and connect to MariaDB as if it was running inside a Kubernetes cluster.
 
-At the moment, 2 different [flavours](#flavours) are supported:
+## Table of contents
+<!-- toc -->
+- [Flavours](#flavours)
+    - [devcontainer](#devcontainer)
+    - [local](#local)
+- [Getting started](#getting-started)
+- [Cluster](#cluster)
+- [Network](#network)
+- [Dependencies](#dependencies)
+- [Generate](#generate)
+- [Install](#install)
+- [Build](#build)
+- [Run](#run)
+- [Test](#test)
+<!-- /toc -->
 
 ## Flavours
 
@@ -19,7 +33,7 @@ Run the operator locally in your machine using `go run`. It requires the followi
 - [go](https://go.dev/doc/install)
 - [docker](https://www.docker.com/)
 
-This flavour uses [KIND](https://kind.sigs.k8s.io/) and [Metallb](https://metallb.universe.tf/) under the hood to provision Kubernetes clusters and assign local IPs to `LoadBalancer` `Services`. It has some [limitations](https://kind.sigs.k8s.io/docs/user/loadbalancer/) in Mac and Windows which will make the operator unable to connect to MariaDB via the `LoadBalancer` `Service`, leading to errors when reconciling SQL-related resources. Alternatively, use the [devcontainer](#devcontainer) flavour.
+This flavour uses [KIND](https://kind.sigs.k8s.io/) and [MetalLB](https://metallb.universe.tf/) under the hood to provision Kubernetes clusters and assign local IPs to `LoadBalancer` `Services`. It has some [limitations](https://kind.sigs.k8s.io/docs/user/loadbalancer/) in Mac and Windows which will make the operator unable to connect to MariaDB via the `LoadBalancer` `Service`, leading to errors when reconciling SQL-related resources. Alternatively, use the [devcontainer](#devcontainer) flavour.
 
 ## Getting started
 
@@ -62,19 +76,19 @@ To start with, you will need a Kubernetes cluster for developing locally. You ca
 ```bash
 make cluster
 ```
-To decomission the cluster:
+To decommission the cluster:
 ```bash
 make cluster-delete
 ```
 
 ## Network
 
-Once you have your [cluster](#cluster) up and running, you can configure the network connectivity so the operator is able to resolve DNS and address MariaDB as if it was running in-cluster:
+You can configure the network connectivity so the operator is able to resolve DNS and address MariaDB as if it was running in-cluster:
 ```bash
 make net
 ```
 
-This connectivity leverages [Metallb](https://metallb.universe.tf/) to assign local IPs to the `LoadBalancer` `Services` for the operator to connect to MariaDB. For this to happen, these local IPs need to be within the docker CIDR, which can be queried using:
+This connectivity leverages [MetalLB](https://metallb.universe.tf/) to assign local IPs to the `LoadBalancer` `Services` for the operator to connect to MariaDB. For this to happen, these local IPs need to be within the docker CIDR, which can be queried using:
 ```bash
 make cidr
 172.18.0.0/16
@@ -85,6 +99,18 @@ When deploying [example manifests](../examples/manifests/), take into account th
 - [examples/manifests/mariadb_v1alpha1_mariadb_replication.yaml](https://github.com/mariadb-operator/mariadb-operator/blob/160b7cc937c031f6faf7c1f50fcae78053faf766/examples/manifests/mariadb_v1alpha1_mariadb_replication.yaml#L87)
 - [examples/manifests/mariadb_v1alpha1_mariadb_galera.yaml](https://github.com/mariadb-operator/mariadb-operator/blob/6f79a8e9e73977c433fb2d5c39a4b7210349b46c/examples/manifests/mariadb_v1alpha1_mariadb_galera.yaml#L102)
 
+
+## Dependencies
+
+You might need the following third party dependencies to test certain features of `mariadb-operator`, to install them run:
+
+```bash
+make install-prometheus
+make install-cert-manager
+make install-minio
+```
+
+Some of this dependencies have ports mapped to the host (i.e. Grafana and Minio to expose the dashboard) so be sure to check the [forwarded ports](../.devcontainer/devcontainer.json) to access. This step requires running `make net` previously.
 
 ## Generate
 
@@ -131,6 +157,8 @@ make run
 ```bash
 make cluster
 make install
+make install-minio
 make net
 make test
 ```
+

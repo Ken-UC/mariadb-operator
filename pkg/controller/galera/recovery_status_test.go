@@ -5,28 +5,29 @@ import (
 	"testing"
 	"time"
 
-	agentgalera "github.com/mariadb-operator/agent/pkg/galera"
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/api/v1alpha1"
+	"github.com/mariadb-operator/mariadb-operator/pkg/galera/recovery"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 )
 
 func TestRecoveryStatusGetSet(t *testing.T) {
 	rs := newRecoveryStatus(&mariadbv1alpha1.MariaDB{})
 
-	state0 := &agentgalera.GaleraState{
+	state0 := &recovery.GaleraState{
 		Version:         "2.1",
 		UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
 		Seqno:           3,
 		SafeToBootstrap: false,
 	}
-	state1 := &agentgalera.GaleraState{
+	state1 := &recovery.GaleraState{
 		Version:         "2.1",
 		UUID:            "0fc0436e-560f-4951-ae97-16911aae7ecf",
 		Seqno:           6,
 		SafeToBootstrap: true,
 	}
-	state2 := &agentgalera.GaleraState{
+	state2 := &recovery.GaleraState{
 		Version:         "2.1",
 		UUID:            "1ef327e6-8579-4d8e-bd3c-6f3f99e40b1d",
 		Seqno:           1,
@@ -51,15 +52,15 @@ func TestRecoveryStatusGetSet(t *testing.T) {
 		t.Errorf("unexpected state value: expected: %v, got: %v", nil, gotState)
 	}
 
-	recovered0 := &agentgalera.Bootstrap{
+	recovered0 := &recovery.Bootstrap{
 		UUID:  "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
 		Seqno: 2,
 	}
-	recovered1 := &agentgalera.Bootstrap{
+	recovered1 := &recovery.Bootstrap{
 		UUID:  "0fc0436e-560f-4951-ae97-16911aae7ecf",
 		Seqno: 3,
 	}
-	recovered2 := &agentgalera.Bootstrap{
+	recovered2 := &recovery.Bootstrap{
 		UUID:  "1ef327e6-8579-4d8e-bd3c-6f3f99e40b1d",
 		Seqno: 9,
 	}
@@ -82,19 +83,39 @@ func TestRecoveryStatusGetSet(t *testing.T) {
 		t.Errorf("unexpected recovered value: expected: %v, got: %v", nil, gotRecovered)
 	}
 
-	expectedRecoveryStatus := &mariadbv1alpha1.GaleraRecoveryStatus{
-		State: map[string]*agentgalera.GaleraState{
+	expectedRecoveryStatus := mariadbv1alpha1.GaleraRecoveryStatus{
+		State: map[string]*recovery.GaleraState{
 			"mariadb-galera-0": state0,
 			"mariadb-galera-1": state1,
 			"mariadb-galera-2": state2,
 		},
-		Recovered: map[string]*agentgalera.Bootstrap{
+		Recovered: map[string]*recovery.Bootstrap{
 			"mariadb-galera-0": recovered0,
 			"mariadb-galera-1": recovered1,
 			"mariadb-galera-2": recovered2,
 		},
 	}
 	gotRecoveryStatus := rs.galeraRecoveryStatus()
+	if !reflect.DeepEqual(expectedRecoveryStatus, gotRecoveryStatus) {
+		t.Errorf("unexpected recovery status value: expected: %v, got: %v", expectedRecoveryStatus, gotRecoveryStatus)
+	}
+
+	rs.setPodsRestarted(true)
+	expectedRecoveryStatus = mariadbv1alpha1.GaleraRecoveryStatus{
+		State: map[string]*recovery.GaleraState{
+			"mariadb-galera-0": state0,
+			"mariadb-galera-1": state1,
+			"mariadb-galera-2": state2,
+		},
+		Recovered: map[string]*recovery.Bootstrap{
+			"mariadb-galera-0": recovered0,
+			"mariadb-galera-1": recovered1,
+			"mariadb-galera-2": recovered2,
+		},
+		PodsRestarted: ptr.To(true),
+	}
+
+	gotRecoveryStatus = rs.galeraRecoveryStatus()
 	if !reflect.DeepEqual(expectedRecoveryStatus, gotRecoveryStatus) {
 		t.Errorf("unexpected recovery status value: expected: %v, got: %v", expectedRecoveryStatus, gotRecoveryStatus)
 	}
@@ -109,6 +130,7 @@ func TestRecoveryStatusBootstrap(t *testing.T) {
 				Enabled: true,
 				GaleraSpec: mariadbv1alpha1.GaleraSpec{
 					Recovery: &mariadbv1alpha1.GaleraRecovery{
+						Enabled:                 true,
 						ClusterHealthyTimeout:   &duration,
 						ClusterBootstrapTimeout: &duration,
 						PodRecoveryTimeout:      &duration,
@@ -176,7 +198,7 @@ func TestRecoveryStatusSafeToBootstrap(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -208,7 +230,7 @@ func TestRecoveryStatusSafeToBootstrap(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -240,7 +262,7 @@ func TestRecoveryStatusSafeToBootstrap(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -272,7 +294,7 @@ func TestRecoveryStatusSafeToBootstrap(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -297,7 +319,7 @@ func TestRecoveryStatusSafeToBootstrap(t *testing.T) {
 			},
 			pods: pods,
 			wantSource: &bootstrapSource{
-				bootstrap: &agentgalera.Bootstrap{
+				bootstrap: &recovery.Bootstrap{
 					UUID:  "0fc0436e-560f-4951-ae97-16911aae7ecf",
 					Seqno: 1,
 				},
@@ -365,7 +387,7 @@ func TestRecoveryStatusIsComplete(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -390,7 +412,7 @@ func TestRecoveryStatusIsComplete(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -421,7 +443,7 @@ func TestRecoveryStatusIsComplete(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-0": {
 								UUID:  "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
 								Seqno: 1,
@@ -442,7 +464,7 @@ func TestRecoveryStatusIsComplete(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-0": {
 								UUID:  "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
 								Seqno: 1,
@@ -467,7 +489,7 @@ func TestRecoveryStatusIsComplete(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -481,7 +503,7 @@ func TestRecoveryStatusIsComplete(t *testing.T) {
 								SafeToBootstrap: true,
 							},
 						},
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-0": {
 								UUID:  "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
 								Seqno: 1,
@@ -498,7 +520,7 @@ func TestRecoveryStatusIsComplete(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -512,7 +534,7 @@ func TestRecoveryStatusIsComplete(t *testing.T) {
 								SafeToBootstrap: true,
 							},
 						},
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-2": {
 								UUID:  "1ef327e6-8579-4d8e-bd3c-6f3f99e40b1d",
 								Seqno: 1,
@@ -529,7 +551,7 @@ func TestRecoveryStatusIsComplete(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -543,7 +565,7 @@ func TestRecoveryStatusIsComplete(t *testing.T) {
 								SafeToBootstrap: true,
 							},
 						},
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-2": {
 								UUID:  "1ef327e6-8579-4d8e-bd3c-6f3f99e40b1d",
 								Seqno: 1,
@@ -560,7 +582,7 @@ func TestRecoveryStatusIsComplete(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -574,7 +596,7 @@ func TestRecoveryStatusIsComplete(t *testing.T) {
 								SafeToBootstrap: true,
 							},
 						},
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-1": {
 								UUID:  "0fc0436e-560f-4951-ae97-16911aae7ecf",
 								Seqno: 1,
@@ -595,7 +617,7 @@ func TestRecoveryStatusIsComplete(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -615,7 +637,7 @@ func TestRecoveryStatusIsComplete(t *testing.T) {
 								SafeToBootstrap: true,
 							},
 						},
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-0": {
 								UUID:  "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
 								Seqno: 1,
@@ -684,7 +706,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -698,7 +720,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 								SafeToBootstrap: false,
 							},
 						},
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-1": {
 								UUID:  "0fc0436e-560f-4951-ae97-16911aae7ecf",
 								Seqno: 1,
@@ -720,7 +742,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -734,7 +756,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 								SafeToBootstrap: true,
 							},
 						},
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-0": {
 								UUID:  "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
 								Seqno: 1,
@@ -745,7 +767,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			},
 			pods: pods,
 			wantSource: &bootstrapSource{
-				bootstrap: &agentgalera.Bootstrap{
+				bootstrap: &recovery.Bootstrap{
 					UUID:  "0fc0436e-560f-4951-ae97-16911aae7ecf",
 					Seqno: 1,
 				},
@@ -758,7 +780,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -772,7 +794,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 								SafeToBootstrap: false,
 							},
 						},
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-0": {
 								UUID:  "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
 								Seqno: 1,
@@ -790,7 +812,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -804,7 +826,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 								SafeToBootstrap: false,
 							},
 						},
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-2": {
 								UUID:  "1ef327e6-8579-4d8e-bd3c-6f3f99e40b1d",
 								Seqno: 1,
@@ -815,7 +837,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			},
 			pods: pods,
 			wantSource: &bootstrapSource{
-				bootstrap: &agentgalera.Bootstrap{
+				bootstrap: &recovery.Bootstrap{
 					UUID:  "1ef327e6-8579-4d8e-bd3c-6f3f99e40b1d",
 					Seqno: 1,
 				},
@@ -828,7 +850,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -842,7 +864,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 								SafeToBootstrap: false,
 							},
 						},
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-2": {
 								UUID:  "1ef327e6-8579-4d8e-bd3c-6f3f99e40b1d",
 								Seqno: 6,
@@ -853,7 +875,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			},
 			pods: pods,
 			wantSource: &bootstrapSource{
-				bootstrap: &agentgalera.Bootstrap{
+				bootstrap: &recovery.Bootstrap{
 					UUID:  "0fc0436e-560f-4951-ae97-16911aae7ecf",
 					Seqno: 8,
 				},
@@ -866,7 +888,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -880,7 +902,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 								SafeToBootstrap: false,
 							},
 						},
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-2": {
 								UUID:  "1ef327e6-8579-4d8e-bd3c-6f3f99e40b1d",
 								Seqno: 6,
@@ -891,7 +913,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			},
 			pods: pods,
 			wantSource: &bootstrapSource{
-				bootstrap: &agentgalera.Bootstrap{
+				bootstrap: &recovery.Bootstrap{
 					UUID:  "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
 					Seqno: 4,
 				},
@@ -904,7 +926,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -924,7 +946,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 								SafeToBootstrap: false,
 							},
 						},
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-0": {
 								UUID:  "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
 								Seqno: 1,
@@ -943,7 +965,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			},
 			pods: pods,
 			wantSource: &bootstrapSource{
-				bootstrap: &agentgalera.Bootstrap{
+				bootstrap: &recovery.Bootstrap{
 					UUID:  "1ef327e6-8579-4d8e-bd3c-6f3f99e40b1d",
 					Seqno: 1,
 				},
@@ -956,7 +978,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -976,7 +998,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 								SafeToBootstrap: false,
 							},
 						},
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-0": {
 								UUID:  "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
 								Seqno: 2,
@@ -995,7 +1017,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			},
 			pods: pods,
 			wantSource: &bootstrapSource{
-				bootstrap: &agentgalera.Bootstrap{
+				bootstrap: &recovery.Bootstrap{
 					UUID:  "1ef327e6-8579-4d8e-bd3c-6f3f99e40b1d",
 					Seqno: 9,
 				},
@@ -1008,7 +1030,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			mdb: &mariadbv1alpha1.MariaDB{
 				Status: mariadbv1alpha1.MariaDBStatus{
 					GaleraRecovery: &mariadbv1alpha1.GaleraRecoveryStatus{
-						State: map[string]*agentgalera.GaleraState{
+						State: map[string]*recovery.GaleraState{
 							"mariadb-galera-0": {
 								Version:         "2.1",
 								UUID:            "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
@@ -1028,7 +1050,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 								SafeToBootstrap: false,
 							},
 						},
-						Recovered: map[string]*agentgalera.Bootstrap{
+						Recovered: map[string]*recovery.Bootstrap{
 							"mariadb-galera-0": {
 								UUID:  "dfc4e849-1c90-43b0-a2c8-0b777c1ce6e4",
 								Seqno: 2,
@@ -1047,7 +1069,7 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 			},
 			pods: pods,
 			wantSource: &bootstrapSource{
-				bootstrap: &agentgalera.Bootstrap{
+				bootstrap: &recovery.Bootstrap{
 					UUID:  "0fc0436e-560f-4951-ae97-16911aae7ecf",
 					Seqno: 6,
 				},
@@ -1071,5 +1093,35 @@ func TestRecoveryStatusBootstrapSource(t *testing.T) {
 				t.Errorf("expect error to not have occurred, got: %v", err)
 			}
 		})
+	}
+}
+
+func TestRecoveryStatusPodsRestarted(t *testing.T) {
+	timeout := 3 * time.Second
+	duration := metav1.Duration{Duration: timeout}
+	mdb := &mariadbv1alpha1.MariaDB{
+		Spec: mariadbv1alpha1.MariaDBSpec{
+			Galera: &mariadbv1alpha1.Galera{
+				Enabled: true,
+				GaleraSpec: mariadbv1alpha1.GaleraSpec{
+					Recovery: &mariadbv1alpha1.GaleraRecovery{
+						Enabled:                 true,
+						ClusterHealthyTimeout:   &duration,
+						ClusterBootstrapTimeout: &duration,
+						PodRecoveryTimeout:      &duration,
+						PodSyncTimeout:          &duration,
+					},
+				},
+			},
+		},
+	}
+	rs := newRecoveryStatus(mdb)
+	if rs.podsRestarted() {
+		t.Error("expect recovery status to not have Pods restarted")
+	}
+
+	rs.setPodsRestarted(true)
+	if !rs.podsRestarted() {
+		t.Error("expect recovery status to have Pods restarted")
 	}
 }

@@ -1,19 +1,3 @@
-/*
-Copyright 2022.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package v1alpha1
 
 import (
@@ -24,23 +8,54 @@ import (
 
 // RestoreSpec defines the desired state of restore
 type RestoreSpec struct {
+	// JobContainerTemplate defines templates to configure Container objects.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	JobContainerTemplate `json:",inline"`
+	// JobPodTemplate defines templates to configure Pod objects.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	JobPodTemplate `json:",inline"`
+	// RestoreSource defines a source for restoring a MariaDB.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	RestoreSource `json:",inline"`
+	// MariaDBRef is a reference to a MariaDB object.
 	// +kubebuilder:validation:Required
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	MariaDBRef MariaDBRef `json:"mariaDbRef" webhook:"inmutable"`
+	// Database defines the logical database to be restored. If not provided, all databases available in the backup are restored.
+	// IMPORTANT: The database must previously exist.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	Database string `json:"database,omitempty"`
+	// LogLevel to be used n the Backup Job. It defaults to 'info'.
+	// +optional
+	// +kubebuilder:default=info
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	LogLevel string `json:"logLevel,omitempty"`
+	// BackoffLimit defines the maximum number of attempts to successfully perform a Backup.
+	// +optional
 	// +kubebuilder:default=5
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:number","urn:alm:descriptor:com.tectonic.ui:advanced"}
 	BackoffLimit int32 `json:"backoffLimit,omitempty"`
+	// RestartPolicy to be added to the Backup Job.
+	// +optional
 	// +kubebuilder:default=OnFailure
+	// +kubebuilder:validation:Enum=Always;OnFailure;Never
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
 	RestartPolicy corev1.RestartPolicy `json:"restartPolicy,omitempty" webhook:"inmutable"`
-
-	Resources *corev1.ResourceRequirements `json:"resources,omitempty" webhook:"inmutable"`
-
-	Affinity     *corev1.Affinity    `json:"affinity,omitempty"`
-	NodeSelector map[string]string   `json:"nodeSelector,omitempty"`
-	Tolerations  []corev1.Toleration `json:"tolerations,omitempty"`
+	// InheritMetadata defines the metadata to be inherited by children resources.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	InheritMetadata *Metadata `json:"inheritMetadata,omitempty"`
 }
 
 // RestoreStatus defines the observed state of restore
 type RestoreStatus struct {
+	// Conditions for the Restore object.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=status,xDescriptors={"urn:alm:descriptor:io.kubernetes.conditions"}
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
@@ -58,8 +73,9 @@ func (r *RestoreStatus) SetCondition(condition metav1.Condition) {
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type==\"Complete\")].message"
 // +kubebuilder:printcolumn:name="MariaDB",type="string",JSONPath=".spec.mariaDbRef.name"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +operator-sdk:csv:customresourcedefinitions:resources={{Restore,v1alpha1},{Job,v1},{ServiceAccount,v1}}
 
-// Restore is the Schema for the restores API
+// Restore is the Schema for the restores API. It is used to define restore jobs and its restoration source.
 type Restore struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -70,6 +86,13 @@ type Restore struct {
 
 func (r *Restore) IsComplete() bool {
 	return meta.IsStatusConditionTrue(r.Status.Conditions, ConditionTypeComplete)
+}
+
+func (b *Restore) SetDefaults(mariadb *MariaDB) {
+	if b.Spec.BackoffLimit == 0 {
+		b.Spec.BackoffLimit = 5
+	}
+	b.Spec.JobPodTemplate.SetDefaults(b.ObjectMeta, mariadb.ObjectMeta)
 }
 
 // +kubebuilder:object:root=true

@@ -1,0 +1,20 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: MariaDB
+metadata:
+  name: mariadb
+spec:
+  # metadata that will be inherited by all children objects
+  inheritMetadata:
+    labels:
+      database.myorg.io: mariadb
+    annotations:
+      database.myorg.io: mariadb
+  # metadata that will be inherited only by the Pod
+  podMetadata:
+     labels:
+        sidecar.istio.io/inject: "false"
+     annotations:
+        sidecar.istio.io/inject: "false"
+
+  storage:
+    size: 1Gi

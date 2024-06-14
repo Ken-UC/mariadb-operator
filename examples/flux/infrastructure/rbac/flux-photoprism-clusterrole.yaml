@@ -49,7 +49,7 @@ rules:
   - update
   - delete
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - connections
   verbs:
@@ -59,3 +59,13 @@ rules:
   - patch
   - update
   - delete
+- apiGroups:
+  - bitnami.com
+  resources:
+  - sealedsecrets
+  verbs:
+  - create
+  - list
+  - get
+  - patch
+  - update

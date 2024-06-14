@@ -1,329 +1,475 @@
-/*
-Copyright 2022.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package v1alpha1
 
 import (
 	"time"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var _ = Describe("MariaDB webhook", func() {
 	Context("When creating a MariaDB", func() {
-		It("Should validate", func() {
-			meta := metav1.ObjectMeta{
-				Name:      "mariadb-create-webhook",
-				Namespace: testNamespace,
-			}
-			sst := SSTMariaBackup
-			replicaThreads := 1
-			// TODO: migrate to Ginkgo v2 and use Ginkgo table tests
-			// https://github.com/mariadb-operator/mariadb-operator/issues/3
-			tt := []struct {
-				by      string
-				mdb     MariaDB
-				wantErr bool
-			}{
-				{
-					by: "no source",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							BootstrapFrom: nil,
+		meta := metav1.ObjectMeta{
+			Name:      "mariadb-create-webhook",
+			Namespace: testNamespace,
+		}
+		DescribeTable(
+			"Should validate",
+			func(mdb *MariaDB, wantErr bool) {
+				_ = k8sClient.Delete(testCtx, mdb)
+				err := k8sClient.Create(testCtx, mdb)
+				if wantErr {
+					Expect(err).To(HaveOccurred())
+				} else {
+					Expect(err).ToNot(HaveOccurred())
+				}
+			},
+			Entry(
+				"No BootstrapFrom",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						BootstrapFrom: nil,
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
 						},
 					},
-					wantErr: false,
 				},
-				{
-					by: "valid source",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							BootstrapFrom: &RestoreSource{
+				false,
+			),
+			Entry(
+				"Valid BootstrapFrom",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						BootstrapFrom: &BootstrapFrom{
+							RestoreSource: RestoreSource{
 								BackupRef: &corev1.LocalObjectReference{
 									Name: "backup-webhook",
 								},
 							},
 						},
-					},
-					wantErr: false,
-				},
-				{
-					by: "invalid source",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							BootstrapFrom: &RestoreSource{
-								FileName: func() *string { b := "backup.sql"; return &b }(),
-							},
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
 						},
 					},
-					wantErr: true,
 				},
-				{
-					by: "valid galera",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							Galera: &Galera{
-								Enabled: true,
-								GaleraSpec: GaleraSpec{
-									SST:            &sst,
-									ReplicaThreads: &replicaThreads,
+				false,
+			),
+			Entry(
+				"Invalid BootstrapFrom",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						BootstrapFrom: &BootstrapFrom{
+							RestoreSource: RestoreSource{
+								TargetRecoveryTime: &metav1.Time{Time: time.Now()},
+							},
+						},
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
+						},
+					},
+				},
+				true,
+			),
+			Entry(
+				"Valid Galera",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						Galera: &Galera{
+							Enabled: true,
+							GaleraSpec: GaleraSpec{
+								SST:            SSTMariaBackup,
+								ReplicaThreads: 1,
+							},
+						},
+						Replicas: 3,
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
+						},
+					},
+				},
+				false,
+			),
+			Entry(
+				"Valid replication",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						Replication: &Replication{
+							ReplicationSpec: ReplicationSpec{
+								Primary: &PrimaryReplication{
+									PodIndex: func() *int { i := 0; return &i }(),
+								},
+								SyncBinlog: func() *bool { f := true; return &f }(),
+							},
+							Enabled: true,
+						},
+						Replicas: 3,
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
+						},
+					},
+				},
+				false,
+			),
+			Entry(
+				"Invalid HA",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						Replication: &Replication{
+							ReplicationSpec: ReplicationSpec{
+								Primary: &PrimaryReplication{
+									PodIndex: func() *int { i := 0; return &i }(),
+								},
+								SyncBinlog: func() *bool { f := true; return &f }(),
+							},
+							Enabled: true,
+						},
+						Galera: &Galera{
+							Enabled: true,
+							GaleraSpec: GaleraSpec{
+								SST:            SSTMariaBackup,
+								ReplicaThreads: 1,
+							},
+						},
+						Replicas: 3,
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
+						},
+					},
+				},
+				true,
+			),
+			Entry(
+				"Fewer replicas required",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						Replicas: 4,
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
+						},
+					},
+				},
+				true,
+			),
+			Entry(
+				"More replicas required",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						Galera: &Galera{
+							Enabled: true,
+							GaleraSpec: GaleraSpec{
+								SST: SSTMariaBackup,
+							},
+						},
+						Replicas: 1,
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
+						},
+					},
+				},
+				true,
+			),
+			Entry(
+				"Invalid min cluster size",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						Galera: &Galera{
+							Enabled: true,
+							GaleraSpec: GaleraSpec{
+								SST: SSTMariaBackup,
+								Recovery: &GaleraRecovery{
+									Enabled:        true,
+									MinClusterSize: ptr.To(intstr.FromInt(4)),
 								},
 							},
-							Replicas: 3,
+						},
+						Replicas: 3,
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
 						},
 					},
-					wantErr: false,
 				},
-				{
-					by: "valid replication",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							Replication: &Replication{
-								ReplicationSpec: ReplicationSpec{
-									Primary: &PrimaryReplication{
-										PodIndex: func() *int { i := 0; return &i }(),
-									},
-									SyncBinlog: func() *bool { f := true; return &f }(),
-								},
-								Enabled: true,
+				true,
+			),
+			Entry(
+				"Invalid SST",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						Galera: &Galera{
+							Enabled: true,
+							GaleraSpec: GaleraSpec{
+								SST:            SST("foo"),
+								ReplicaThreads: 1,
 							},
-							Replicas: 3,
+						},
+						Replicas: 3,
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
 						},
 					},
-					wantErr: false,
 				},
-				{
-					by: "invalid HA",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							Replication: &Replication{
-								ReplicationSpec: ReplicationSpec{
-									Primary: &PrimaryReplication{
-										PodIndex: func() *int { i := 0; return &i }(),
-									},
-									SyncBinlog: func() *bool { f := true; return &f }(),
-								},
-								Enabled: true,
+				true,
+			),
+			Entry(
+				"Invalid replica threads",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						Galera: &Galera{
+							Enabled: true,
+							GaleraSpec: GaleraSpec{
+								SST:            SSTMariaBackup,
+								ReplicaThreads: -1,
 							},
-							Galera: &Galera{
-								Enabled: true,
-								GaleraSpec: GaleraSpec{
-									SST:            &sst,
-									ReplicaThreads: &replicaThreads,
-								},
-							},
-							Replicas: 3,
+						},
+						Replicas: 3,
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
 						},
 					},
-					wantErr: true,
 				},
-				{
-					by: "fewer replicas required",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							Replicas: 4,
-						},
-					},
-					wantErr: true,
-				},
-				{
-					by: "more replicas required",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							Galera: &Galera{
-								Enabled: true,
-								GaleraSpec: GaleraSpec{
-									SST: &sst,
+				true,
+			),
+			Entry(
+				"Invalid provider options",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						Galera: &Galera{
+							Enabled: true,
+							GaleraSpec: GaleraSpec{
+								SST: SSTMariaBackup,
+								ProviderOptions: map[string]string{
+									"ist.recv_addr": "1.2.3.4:4568",
 								},
 							},
-							Replicas: 1,
+						},
+						Replicas: 3,
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
 						},
 					},
-					wantErr: true,
 				},
-				{
-					by: "invalid SST",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							Galera: &Galera{
-								Enabled: true,
-								GaleraSpec: GaleraSpec{
-									SST: func() *SST {
-										s := SST("foo")
-										return &s
-									}(),
-									ReplicaThreads: &replicaThreads,
+				true,
+			),
+			Entry(
+				"Invalid replication primary pod index",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						Replication: &Replication{
+							ReplicationSpec: ReplicationSpec{
+								Primary: &PrimaryReplication{
+									PodIndex: func() *int { i := 4; return &i }(),
+								},
+								Replica: &ReplicaReplication{
+									WaitPoint:         func() *WaitPoint { w := WaitPointAfterCommit; return &w }(),
+									ConnectionTimeout: &metav1.Duration{Duration: time.Duration(1 * time.Second)},
+									ConnectionRetries: func() *int { r := 3; return &r }(),
 								},
 							},
-							Replicas: 3,
+							Enabled: true,
+						},
+						Replicas: 3,
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
 						},
 					},
-					wantErr: true,
 				},
-				{
-					by: "invalid replica threads",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							Galera: &Galera{
-								Enabled: true,
-								GaleraSpec: GaleraSpec{
-									SST: &sst,
-									ReplicaThreads: func() *int {
-										r := -1
-										return &r
-									}(),
+				true,
+			),
+			Entry(
+				"Invalid Galera primary pod index",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						Galera: &Galera{
+							GaleraSpec: GaleraSpec{
+								Primary: PrimaryGalera{
+									PodIndex: ptr.To(4),
 								},
 							},
-							Replicas: 3,
+							Enabled: true,
+						},
+						Replicas: 3,
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
 						},
 					},
-					wantErr: true,
 				},
-				{
-					by: "invalid replication primary pod index",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							Replication: &Replication{
-								ReplicationSpec: ReplicationSpec{
-									Primary: &PrimaryReplication{
-										PodIndex: func() *int { i := 4; return &i }(),
-									},
-									Replica: &ReplicaReplication{
-										WaitPoint:         func() *WaitPoint { w := WaitPointAfterCommit; return &w }(),
-										ConnectionTimeout: &metav1.Duration{Duration: time.Duration(1 * time.Second)},
-										ConnectionRetries: func() *int { r := 3; return &r }(),
-									},
+				true,
+			),
+			Entry(
+				"Invalid replica wait point",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						Replication: &Replication{
+							ReplicationSpec: ReplicationSpec{
+								Replica: &ReplicaReplication{
+									WaitPoint: func() *WaitPoint { w := WaitPoint("foo"); return &w }(),
 								},
-								Enabled: true,
 							},
-							Replicas: 3,
+							Enabled: true,
 						},
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
+						},
+						Replicas: 3,
 					},
-					wantErr: true,
 				},
-				{
-					by: "invalid Galera primary pod index",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							Galera: &Galera{
-								GaleraSpec: GaleraSpec{
-									Primary: &PrimaryGalera{
-										PodIndex: func() *int { i := 4; return &i }(),
-									},
+				true,
+			),
+			Entry(
+				"Invalid GTID",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						Replication: &Replication{
+							ReplicationSpec: ReplicationSpec{
+								Replica: &ReplicaReplication{
+									Gtid: func() *Gtid { g := Gtid("foo"); return &g }(),
 								},
-								Enabled: true,
 							},
-							Replicas: 3,
+							Enabled: true,
+						},
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
+						},
+						Replicas: 3,
+					},
+				},
+				true,
+			),
+			Entry(
+				"Invalid MaxScale",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						MaxScaleRef: &corev1.ObjectReference{
+							Name: "maxscale",
+						},
+						MaxScale: &MariaDBMaxScaleSpec{
+							Enabled: true,
 						},
 					},
-					wantErr: true,
 				},
-				{
-					by: "invalid replica wait point",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							Replication: &Replication{
-								ReplicationSpec: ReplicationSpec{
-									Replica: &ReplicaReplication{
-										WaitPoint: func() *WaitPoint { w := WaitPoint("foo"); return &w }(),
-									},
+				true,
+			),
+			Entry(
+				"Invalid PodDisruptionBudget",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						PodDisruptionBudget: &PodDisruptionBudget{
+							MaxUnavailable: func() *intstr.IntOrString { i := intstr.FromString("50%"); return &i }(),
+							MinAvailable:   func() *intstr.IntOrString { i := intstr.FromString("50%"); return &i }(),
+						},
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
+						},
+					},
+				},
+				true,
+			),
+			Entry(
+				"Valid PodDisruptionBudget",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						PodDisruptionBudget: &PodDisruptionBudget{
+							MaxUnavailable: func() *intstr.IntOrString { i := intstr.FromString("50%"); return &i }(),
+						},
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
+						},
+					},
+				},
+				false,
+			),
+			Entry(
+				"Invalid storage",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						Storage: Storage{},
+					},
+				},
+				true,
+			),
+			Entry(
+				"Invalid rootPasswordSecretKeyRef and rootEmptyPassword",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						RootPasswordSecretKeyRef: GeneratedSecretKeyRef{
+							SecretKeySelector: corev1.SecretKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{
+									Name: "secret",
 								},
-								Enabled: true,
+								Key: "root-password",
 							},
-							Replicas: 3,
+						},
+						RootEmptyPassword: ptr.To(true),
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
 						},
 					},
-					wantErr: true,
 				},
-				{
-					by: "invalid GTID",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							Replication: &Replication{
-								ReplicationSpec: ReplicationSpec{
-									Replica: &ReplicaReplication{
-										Gtid: func() *Gtid { g := Gtid("foo"); return &g }(),
-									},
+				true,
+			),
+			Entry(
+				"Valid rootPasswordSecretKeyRef",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						RootPasswordSecretKeyRef: GeneratedSecretKeyRef{
+							SecretKeySelector: corev1.SecretKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{
+									Name: "secret",
 								},
-								Enabled: true,
-							},
-							Replicas: 3,
-						},
-					},
-					wantErr: true,
-				},
-				{
-					by: "invalid pod disruption budget",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							PodDisruptionBudget: &PodDisruptionBudget{
-								MaxUnavailable: func() *intstr.IntOrString { i := intstr.FromString("50%"); return &i }(),
-								MinAvailable:   func() *intstr.IntOrString { i := intstr.FromString("50%"); return &i }(),
+								Key: "root-password",
 							},
 						},
-					},
-					wantErr: true,
-				},
-				{
-					by: "valid pod disruption budget",
-					mdb: MariaDB{
-						ObjectMeta: meta,
-						Spec: MariaDBSpec{
-							PodDisruptionBudget: &PodDisruptionBudget{
-								MaxUnavailable: func() *intstr.IntOrString { i := intstr.FromString("50%"); return &i }(),
-							},
+						RootEmptyPassword: ptr.To(false),
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
 						},
 					},
-					wantErr: false,
 				},
-			}
-
-			for _, t := range tt {
-				By(t.by)
-				_ = k8sClient.Delete(testCtx, &t.mdb)
-				err := k8sClient.Create(testCtx, &t.mdb)
-				if t.wantErr {
-					Expect(err).To(HaveOccurred())
-				} else {
-					Expect(err).ToNot(HaveOccurred())
-				}
-			}
-		})
+				false,
+			),
+			Entry(
+				"Valid rootEmptyPassword",
+				&MariaDB{
+					ObjectMeta: meta,
+					Spec: MariaDBSpec{
+						RootPasswordSecretKeyRef: GeneratedSecretKeyRef{},
+						RootEmptyPassword:        ptr.To(true),
+						Storage: Storage{
+							Size: ptr.To(resource.MustParse("100Mi")),
+						},
+					},
+				},
+				false,
+			),
+		)
 
 		It("Should default replication", func() {
 			mariadb := MariaDB{
@@ -332,35 +478,12 @@ var _ = Describe("MariaDB webhook", func() {
 					Namespace: testNamespace,
 				},
 				Spec: MariaDBSpec{
-					ContainerTemplate: ContainerTemplate{
-						Image: Image{
-							Repository: "mariadb",
-							Tag:        "11.0.3",
-							PullPolicy: corev1.PullIfNotPresent,
-						},
-					},
-					RootPasswordSecretKeyRef: corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: "secret",
-						},
-						Key: "root-password",
-					},
-					Port: 3306,
-					VolumeClaimTemplate: VolumeClaimTemplate{
-						PersistentVolumeClaimSpec: corev1.PersistentVolumeClaimSpec{
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									"storage": resource.MustParse("100Mi"),
-								},
-							},
-							AccessModes: []corev1.PersistentVolumeAccessMode{
-								corev1.ReadWriteOnce,
-							},
-						},
-					},
 					Replicas: 3,
 					Replication: &Replication{
 						Enabled: true,
+					},
+					Storage: Storage{
+						Size: ptr.To(resource.MustParse("100Mi")),
 					},
 				},
 			}
@@ -378,32 +501,6 @@ var _ = Describe("MariaDB webhook", func() {
 					Namespace: testNamespace,
 				},
 				Spec: MariaDBSpec{
-					ContainerTemplate: ContainerTemplate{
-						Image: Image{
-							Repository: "mariadb",
-							Tag:        "11.0.3",
-							PullPolicy: corev1.PullIfNotPresent,
-						},
-					},
-					RootPasswordSecretKeyRef: corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: "secret",
-						},
-						Key: "root-password",
-					},
-					Port: 3306,
-					VolumeClaimTemplate: VolumeClaimTemplate{
-						PersistentVolumeClaimSpec: corev1.PersistentVolumeClaimSpec{
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									"storage": resource.MustParse("100Mi"),
-								},
-							},
-							AccessModes: []corev1.PersistentVolumeAccessMode{
-								corev1.ReadWriteOnce,
-							},
-						},
-					},
 					Replicas: 3,
 					Replication: &Replication{
 						Enabled: true,
@@ -416,6 +513,21 @@ var _ = Describe("MariaDB webhook", func() {
 							},
 						},
 					},
+					Storage: Storage{
+						Size: ptr.To(resource.MustParse("100Mi")),
+						VolumeClaimTemplate: &VolumeClaimTemplate{
+							PersistentVolumeClaimSpec: corev1.PersistentVolumeClaimSpec{
+								Resources: corev1.VolumeResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceStorage: resource.MustParse("100Mi"),
+									},
+								},
+								AccessModes: []corev1.PersistentVolumeAccessMode{
+									corev1.ReadWriteOnce,
+								},
+							},
+						},
+					},
 				},
 			}
 			Expect(k8sClient.Create(testCtx, &mariadb)).To(Succeed())
@@ -424,129 +536,23 @@ var _ = Describe("MariaDB webhook", func() {
 			By("Expect MariaDB replication spec to be defaulted")
 			Expect(mariadb.Spec.Replication.ReplicationSpec).To(Equal(DefaultReplicationSpec))
 		})
-
-		It("Should default Galera", func() {
-			mariadb := MariaDB{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "mariadb-galera-default-webhook",
-					Namespace: testNamespace,
-				},
-				Spec: MariaDBSpec{
-					ContainerTemplate: ContainerTemplate{
-						Image: Image{
-							Repository: "mariadb",
-							Tag:        "11.0.3",
-							PullPolicy: corev1.PullIfNotPresent,
-						},
-					},
-					RootPasswordSecretKeyRef: corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: "secret",
-						},
-						Key: "root-password",
-					},
-					Port: 3306,
-					VolumeClaimTemplate: VolumeClaimTemplate{
-						PersistentVolumeClaimSpec: corev1.PersistentVolumeClaimSpec{
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									"storage": resource.MustParse("100Mi"),
-								},
-							},
-							AccessModes: []corev1.PersistentVolumeAccessMode{
-								corev1.ReadWriteOnce,
-							},
-						},
-					},
-					Replicas: 3,
-					Galera: &Galera{
-						Enabled: true,
-						GaleraSpec: GaleraSpec{
-							Agent: &GaleraAgent{
-								ContainerTemplate: ContainerTemplate{
-									Image: Image{
-										Repository: "ghcr.io/mariadb-operator/agent",
-										Tag:        "v0.0.2",
-										PullPolicy: corev1.PullIfNotPresent,
-									},
-								},
-							},
-							Recovery: &GaleraRecovery{
-								Enabled: true,
-							},
-						},
-					},
-				},
-			}
-			Expect(k8sClient.Create(testCtx, &mariadb)).To(Succeed())
-			Expect(k8sClient.Get(testCtx, client.ObjectKeyFromObject(&mariadb), &mariadb)).To(Succeed())
-
-			By("Expect MariaDB Galera spec to be defaulted")
-			Expect(mariadb.Spec.Galera.GaleraSpec).To(Equal(DefaultGaleraSpec))
-		})
-
-		It("Should partially default Galera", func() {
-			mariadb := MariaDB{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "mariadb-galera-partial-default-webhook",
-					Namespace: testNamespace,
-				},
-				Spec: MariaDBSpec{
-					ContainerTemplate: ContainerTemplate{
-						Image: Image{
-							Repository: "mariadb",
-							Tag:        "11.0.2",
-							PullPolicy: corev1.PullIfNotPresent,
-						},
-					},
-					RootPasswordSecretKeyRef: corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: "secret",
-						},
-						Key: "root-password",
-					},
-					Port: 3306,
-					VolumeClaimTemplate: VolumeClaimTemplate{
-						PersistentVolumeClaimSpec: corev1.PersistentVolumeClaimSpec{
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									"storage": resource.MustParse("100Mi"),
-								},
-							},
-							AccessModes: []corev1.PersistentVolumeAccessMode{
-								corev1.ReadWriteOnce,
-							},
-						},
-					},
-					Replicas: 3,
-					Galera: &Galera{
-						Enabled: true,
-					},
-				},
-			}
-			Expect(k8sClient.Create(testCtx, &mariadb)).To(Succeed())
-			Expect(k8sClient.Get(testCtx, client.ObjectKeyFromObject(&mariadb), &mariadb)).To(Succeed())
-
-			By("Expect MariaDB Galera spec to be defaulted")
-			Expect(mariadb.Spec.Galera.GaleraSpec).To(Equal(DefaultGaleraSpec))
-		})
 	})
 
-	Context("When updating a MariaDB", func() {
-		It("Should validate", func() {
-			By("Creating MariaDB")
-			test := "test"
+	Context("When updating a MariaDB", Ordered, func() {
+		key := types.NamespacedName{
+			Name:      "mariadb-update-webhook",
+			Namespace: testNamespace,
+		}
+		BeforeAll(func() {
 			mariadb := MariaDB{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "mariadb-update-webhook",
-					Namespace: testNamespace,
+					Name:      key.Name,
+					Namespace: key.Namespace,
 				},
 				Spec: MariaDBSpec{
+					Image:           "mariadb:11.3.3",
+					ImagePullPolicy: corev1.PullIfNotPresent,
 					ContainerTemplate: ContainerTemplate{
-						Image: Image{
-							Repository: "mariadb",
-							Tag:        "11.0.3",
-						},
 						Resources: &corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{
 								"cpu": resource.MustParse("100m"),
@@ -568,214 +574,204 @@ var _ = Describe("MariaDB webhook", func() {
 							},
 						},
 					},
-					RootPasswordSecretKeyRef: corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: "secret",
-						},
-						Key: "root-password",
-					},
-					Database: &test,
-					Username: &test,
-					PasswordSecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: "secret",
-						},
-						Key: "password",
-					},
-					VolumeClaimTemplate: VolumeClaimTemplate{
-						PersistentVolumeClaimSpec: corev1.PersistentVolumeClaimSpec{
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									"storage": resource.MustParse("100Mi"),
-								},
+					RootPasswordSecretKeyRef: GeneratedSecretKeyRef{
+						SecretKeySelector: corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: "secret",
 							},
-							AccessModes: []corev1.PersistentVolumeAccessMode{
-								corev1.ReadWriteOnce,
+							Key: "root-password",
+						},
+					},
+					Database: ptr.To("test"),
+					Username: ptr.To("test"),
+					PasswordSecretKeyRef: &GeneratedSecretKeyRef{
+						SecretKeySelector: corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: "secret",
+							},
+							Key: "password",
+						},
+					},
+					MyCnf: ptr.To("foo"),
+					BootstrapFrom: &BootstrapFrom{
+						RestoreSource: RestoreSource{
+							BackupRef: &corev1.LocalObjectReference{
+								Name: "backup",
 							},
 						},
 					},
-					MyCnf: func() *string { c := "foo"; return &c }(),
-					BootstrapFrom: &RestoreSource{
-						BackupRef: &corev1.LocalObjectReference{
-							Name: "backup",
-						},
-					},
-					Metrics: &Metrics{
+					Metrics: &MariadbMetrics{
 						Exporter: Exporter{
-							ContainerTemplate: ContainerTemplate{
-								Image: Image{
-									Repository: "prom/mysqld-exporter",
-									Tag:        "v0.14.0",
-								},
-							},
+							Image:           "prom/mysqld-exporter:v0.15.1",
+							ImagePullPolicy: corev1.PullIfNotPresent,
 						},
 						ServiceMonitor: ServiceMonitor{
 							PrometheusRelease: "prometheus",
 						},
 					},
+					Storage: Storage{
+						Size: ptr.To(resource.MustParse("100Mi")),
+					},
 				},
 			}
 			Expect(k8sClient.Create(testCtx, &mariadb)).To(Succeed())
+		})
+		DescribeTable(
+			"Should validate",
+			func(patchFn func(mdb *MariaDB), wantErr bool) {
+				var mdb MariaDB
+				Expect(k8sClient.Get(testCtx, key, &mdb)).To(Succeed())
 
-			// TODO: migrate to Ginkgo v2 and use Ginkgo table tests
-			// https://github.com/mariadb-operator/mariadb-operator/issues/3
-			tt := []struct {
-				by      string
-				patchFn func(mdb *MariaDB)
-				wantErr bool
-			}{
-				{
-					by: "Updating RootPasswordSecretKeyRef",
-					patchFn: func(mdb *MariaDB) {
-						mdb.Spec.RootPasswordSecretKeyRef.Key = "another-password"
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating Database",
-					patchFn: func(mdb *MariaDB) {
-						another := "another-database"
-						mdb.Spec.Database = &another
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating Username",
-					patchFn: func(mdb *MariaDB) {
-						another := "another-username"
-						mdb.Spec.Username = &another
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating PasswordSecretKeyRef",
-					patchFn: func(mdb *MariaDB) {
-						mdb.Spec.PasswordSecretKeyRef.Key = "another-password"
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating Image",
-					patchFn: func(mdb *MariaDB) {
-						mdb.Spec.Image.Tag = "10.7.5"
-					},
-					wantErr: false,
-				},
-				{
-					by: "Updating Port",
-					patchFn: func(mdb *MariaDB) {
-						mdb.Spec.Port = 3307
-					},
-					wantErr: false,
-				},
-				{
-					by: "Updating Storage",
-					patchFn: func(mdb *MariaDB) {
-						newClass := "fast-storage"
-						mdb.Spec.VolumeClaimTemplate.StorageClassName = &newClass
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating MyCnf",
-					patchFn: func(mdb *MariaDB) {
-						newCnf := "bar"
-						mdb.Spec.MyCnf = &newCnf
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating MyCnfConfigMapKeyRef",
-					patchFn: func(mdb *MariaDB) {
-						mdb.Spec.MyCnfConfigMapKeyRef = &corev1.ConfigMapKeySelector{
-							LocalObjectReference: corev1.LocalObjectReference{
-								Name: "my-cnf-configmap",
-							},
-							Key: "config",
-						}
-					},
-					wantErr: false,
-				},
-				{
-					by: "Updating BootstrapFromBackup",
-					patchFn: func(mdb *MariaDB) {
-						mdb.Spec.BootstrapFrom = nil
-					},
-					wantErr: false,
-				},
-				{
-					by: "Updating Metrics",
-					patchFn: func(mdb *MariaDB) {
-						mdb.Spec.Metrics.Exporter.Image.Tag = "v0.14.1"
-					},
-					wantErr: false,
-				},
-				{
-					by: "Updating Resources",
-					patchFn: func(mdb *MariaDB) {
-						mdb.Spec.Resources = &corev1.ResourceRequirements{
-							Requests: corev1.ResourceList{
-								"cpu": resource.MustParse("200m"),
-							},
-						}
-					},
-					wantErr: false,
-				},
-				{
-					by: "Updating Env",
-					patchFn: func(mdb *MariaDB) {
-						mdb.Spec.Env = []corev1.EnvVar{
-							{
-								Name:  "FOO",
-								Value: "foo",
-							},
-						}
-					},
-					wantErr: false,
-				},
-				{
-					by: "Updating EnvFrom",
-					patchFn: func(mdb *MariaDB) {
-						mdb.Spec.EnvFrom = []corev1.EnvFromSource{
-							{
-								ConfigMapRef: &corev1.ConfigMapEnvSource{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: "mariadb",
-									},
-								},
-							},
-						}
-					},
-					wantErr: false,
-				},
-			}
+				patch := client.MergeFrom(mdb.DeepCopy())
+				patchFn(&mdb)
 
-			for _, t := range tt {
-				By(t.by)
-				Expect(k8sClient.Get(testCtx, client.ObjectKeyFromObject(&mariadb), &mariadb)).To(Succeed())
-
-				patch := client.MergeFrom(mariadb.DeepCopy())
-				t.patchFn(&mariadb)
-
-				err := k8sClient.Patch(testCtx, &mariadb, patch)
-				if t.wantErr {
+				err := k8sClient.Patch(testCtx, &mdb, patch)
+				if wantErr {
 					Expect(err).To(HaveOccurred())
 				} else {
 					Expect(err).ToNot(HaveOccurred())
 				}
-			}
-		})
+			},
+			Entry(
+				"Updating RootPasswordSecretKeyRef",
+				func(mdb *MariaDB) {
+					mdb.Spec.RootPasswordSecretKeyRef.Key = "another-password"
+				},
+				true,
+			),
+			Entry(
+				"Updating Database",
+				func(mdb *MariaDB) {
+					mdb.Spec.Database = ptr.To("another-database")
+				},
+				true,
+			),
+			Entry(
+				"Updating Username",
+				func(mdb *MariaDB) {
+					mdb.Spec.Username = ptr.To("another-username")
+				},
+				true,
+			),
+			Entry(
+				"Updating PasswordSecretKeyRef",
+				func(mdb *MariaDB) {
+					mdb.Spec.PasswordSecretKeyRef.Key = "another-password"
+				},
+				false,
+			),
+			Entry(
+				"Updating Image",
+				func(mdb *MariaDB) {
+					mdb.Spec.Image = "mariadb:11.2.2"
+				},
+				false,
+			),
+			Entry(
+				"Updating Port",
+				func(mdb *MariaDB) {
+					mdb.Spec.Port = 3307
+				},
+				false,
+			),
+			Entry(
+				"Updating Storage size",
+				func(mdb *MariaDB) {
+					mdb.Spec.Storage.Size = ptr.To(resource.MustParse("200Mi"))
+				},
+				false,
+			),
+			Entry(
+				"Decreasing Storage size",
+				func(mdb *MariaDB) {
+					mdb.Spec.Storage.Size = ptr.To(resource.MustParse("50Mi"))
+				},
+				true,
+			),
+			Entry(
+				"Updating MyCnf",
+				func(mdb *MariaDB) {
+					mdb.Spec.MyCnf = ptr.To("bar")
+				},
+				false,
+			),
+			Entry(
+				"Updating MyCnfConfigMapKeyRef",
+				func(mdb *MariaDB) {
+					mdb.Spec.MyCnfConfigMapKeyRef = &corev1.ConfigMapKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: "my-cnf-configmap",
+						},
+						Key: "config",
+					}
+				},
+				false,
+			),
+			Entry(
+				"Updating BootstrapFrom",
+				func(mdb *MariaDB) {
+					mdb.Spec.BootstrapFrom = nil
+				},
+				false,
+			),
+			Entry(
+				"Updating Metrics",
+				func(mdb *MariaDB) {
+					mdb.Spec.Metrics.Exporter.Image = "prom/mysqld-exporter:v0.14.1"
+				},
+				false,
+			),
+			Entry(
+				"Updating Resources",
+				func(mdb *MariaDB) {
+					mdb.Spec.Resources = &corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							"cpu": resource.MustParse("200m"),
+						},
+					}
+				},
+				false,
+			),
+			Entry(
+				"Updating Env",
+				func(mdb *MariaDB) {
+					mdb.Spec.Env = []corev1.EnvVar{
+						{
+							Name:  "FOO",
+							Value: "foo",
+						},
+					}
+				},
+				false,
+			),
+			Entry(
+				"Updating EnvFrom",
+				func(mdb *MariaDB) {
+					mdb.Spec.EnvFrom = []corev1.EnvFromSource{
+						{
+							ConfigMapRef: &corev1.ConfigMapEnvSource{
+								LocalObjectReference: corev1.LocalObjectReference{
+									Name: "mariadb",
+								},
+							},
+						},
+					}
+				},
+				false,
+			),
+		)
+	})
 
-		It("Should validate primary switchover", func() {
-			By("Creating MariaDBs")
-			noSwitchoverKey := types.NamespacedName{
-				Name:      "mariadb-no-switchover-webhook",
-				Namespace: testNamespace,
-			}
-			switchoverKey := types.NamespacedName{
-				Name:      "mariadb-switchover-webhook",
-				Namespace: testNamespace,
-			}
+	Context("When updating MariaDB primary pod index", Ordered, func() {
+		noSwitchoverKey := types.NamespacedName{
+			Name:      "mariadb-no-switchover-webhook",
+			Namespace: testNamespace,
+		}
+		switchoverKey := types.NamespacedName{
+			Name:      "mariadb-switchover-webhook",
+			Namespace: testNamespace,
+		}
+		BeforeAll(func() {
 			test := "test"
 			mariaDb := MariaDB{
 				ObjectMeta: metav1.ObjectMeta{
@@ -783,37 +779,14 @@ var _ = Describe("MariaDB webhook", func() {
 					Namespace: noSwitchoverKey.Namespace,
 				},
 				Spec: MariaDBSpec{
-					ContainerTemplate: ContainerTemplate{
-						Image: Image{
-							Repository: "mariadb",
-							Tag:        "11.0.3",
-						},
-					},
-					RootPasswordSecretKeyRef: corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: "secret",
-						},
-						Key: "root-password",
-					},
 					Database: &test,
 					Username: &test,
-					PasswordSecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: "secret",
-						},
-						Key: "password",
-					},
-
-					VolumeClaimTemplate: VolumeClaimTemplate{
-						PersistentVolumeClaimSpec: corev1.PersistentVolumeClaimSpec{
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									"storage": resource.MustParse("100Mi"),
-								},
+					PasswordSecretKeyRef: &GeneratedSecretKeyRef{
+						SecretKeySelector: corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: "secret",
 							},
-							AccessModes: []corev1.PersistentVolumeAccessMode{
-								corev1.ReadWriteOnce,
-							},
+							Key: "password",
 						},
 					},
 					Replication: &Replication{
@@ -826,6 +799,9 @@ var _ = Describe("MariaDB webhook", func() {
 						Enabled: true,
 					},
 					Replicas: 3,
+					Storage: Storage{
+						Size: ptr.To(resource.MustParse("100Mi")),
+					},
 				},
 			}
 			mariaDbSwitchover := MariaDB{
@@ -834,36 +810,14 @@ var _ = Describe("MariaDB webhook", func() {
 					Namespace: switchoverKey.Namespace,
 				},
 				Spec: MariaDBSpec{
-					ContainerTemplate: ContainerTemplate{
-						Image: Image{
-							Repository: "mariadb",
-							Tag:        "11.0.3",
-						},
-					},
-					RootPasswordSecretKeyRef: corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: "secret",
-						},
-						Key: "root-password",
-					},
 					Database: &test,
 					Username: &test,
-					PasswordSecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: "secret",
-						},
-						Key: "password",
-					},
-					VolumeClaimTemplate: VolumeClaimTemplate{
-						PersistentVolumeClaimSpec: corev1.PersistentVolumeClaimSpec{
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									"storage": resource.MustParse("100Mi"),
-								},
+					PasswordSecretKeyRef: &GeneratedSecretKeyRef{
+						SecretKeySelector: corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: "secret",
 							},
-							AccessModes: []corev1.PersistentVolumeAccessMode{
-								corev1.ReadWriteOnce,
-							},
+							Key: "password",
 						},
 					},
 					Replication: &Replication{
@@ -876,6 +830,9 @@ var _ = Describe("MariaDB webhook", func() {
 						Enabled: true,
 					},
 					Replicas: 3,
+					Storage: Storage{
+						Size: ptr.To(resource.MustParse("100Mi")),
+					},
 				},
 				Status: MariaDBStatus{
 					Conditions: []metav1.Condition{
@@ -903,68 +860,59 @@ var _ = Describe("MariaDB webhook", func() {
 				},
 			}
 			Expect(k8sClient.Status().Update(testCtx, &mariaDbSwitchover)).To(Succeed())
+		})
+		DescribeTable(
+			"Should validate",
+			func(key types.NamespacedName, patchFn func(mdb *MariaDB), wantErr bool) {
+				var mdb MariaDB
+				Expect(k8sClient.Get(testCtx, key, &mdb)).To(Succeed())
 
-			// TODO: migrate to Ginkgo v2 and use Ginkgo table tests
-			// https://github.com/mariadb-operator/mariadb-operator/issues/3
-			tt := []struct {
-				by      string
-				key     types.NamespacedName
-				patchFn func(mdb *MariaDB)
-				wantErr bool
-			}{
-				{
-					by:  "Updating primary pod Index",
-					key: noSwitchoverKey,
-					patchFn: func(mdb *MariaDB) {
-						i := 1
-						mdb.Spec.Replication.Primary.PodIndex = &i
-					},
-					wantErr: false,
-				},
-				{
-					by:  "Updating automatic failover",
-					key: noSwitchoverKey,
-					patchFn: func(mdb *MariaDB) {
-						f := true
-						mdb.Spec.Replication.Primary.AutomaticFailover = &f
-					},
-					wantErr: false,
-				},
-				{
-					by:  "Updating primary pod Index when switching",
-					key: switchoverKey,
-					patchFn: func(mdb *MariaDB) {
-						i := 1
-						mdb.Spec.Replication.Primary.PodIndex = &i
-					},
-					wantErr: true,
-				},
-				{
-					by:  "Updating automatic failover when switching",
-					key: switchoverKey,
-					patchFn: func(mdb *MariaDB) {
-						f := true
-						mdb.Spec.Replication.Primary.AutomaticFailover = &f
-					},
-					wantErr: true,
-				},
-			}
+				patch := client.MergeFrom(mdb.DeepCopy())
+				patchFn(&mdb)
 
-			for _, t := range tt {
-				By(t.by)
-				var testSwitchover MariaDB
-				Expect(k8sClient.Get(testCtx, t.key, &testSwitchover)).To(Succeed())
-
-				patch := client.MergeFrom(testSwitchover.DeepCopy())
-				t.patchFn(&testSwitchover)
-
-				err := k8sClient.Patch(testCtx, &testSwitchover, patch)
-				if t.wantErr {
+				err := k8sClient.Patch(testCtx, &mdb, patch)
+				if wantErr {
 					Expect(err).To(HaveOccurred())
 				} else {
 					Expect(err).ToNot(HaveOccurred())
 				}
-			}
-		})
+			},
+			Entry(
+				"Updating primary pod index",
+				noSwitchoverKey,
+				func(mdb *MariaDB) {
+					i := 1
+					mdb.Spec.Replication.Primary.PodIndex = &i
+				},
+				false,
+			),
+			Entry(
+				"Updating automatic failover",
+				noSwitchoverKey,
+				func(mdb *MariaDB) {
+					f := true
+					mdb.Spec.Replication.Primary.AutomaticFailover = &f
+				},
+				false,
+			),
+			Entry(
+				"Updating primary pod index when switching",
+				switchoverKey,
+				func(mdb *MariaDB) {
+					i := 1
+					mdb.Spec.Replication.Primary.PodIndex = &i
+				},
+				true,
+			),
+			Entry(
+				"Updating automatic failover when switching",
+				switchoverKey,
+				func(mdb *MariaDB) {
+					f := true
+					mdb.Spec.Replication.Primary.AutomaticFailover = &f
+				},
+				true,
+			),
+		)
 	})
 })

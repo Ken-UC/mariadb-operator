@@ -1,0 +1,16 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Grant
+metadata:
+  name: grant
+spec:
+  mariaDbRef:
+    name: mariadb
+  privileges:
+    - "SELECT"
+    - "INSERT"
+    - "UPDATE"
+  database: "*"
+  table: "*"
+  username: my-user
+  grantOption: true
+  host: "%"

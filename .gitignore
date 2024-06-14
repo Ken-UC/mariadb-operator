@@ -19,3 +19,24 @@ bin/
 
 # Packaged Helm charts
 *.tgz
+
+# Git
+.gitconfig
+
+# Preflight
+artifacts/
+
+# Log
+*.log
+
+# Backup
+/backup/
+
+# Init
+/mariadb/
+
+# Coverage
+cover.*
+
+# Operator pipelines
+/operator-pipelines

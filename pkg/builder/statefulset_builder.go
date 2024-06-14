@@ -1,94 +1,102 @@
 package builder
 
 import (
-	"errors"
 	"fmt"
 
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/api/v1alpha1"
-	ctrlresources "github.com/mariadb-operator/mariadb-operator/controllers/resources"
-	"github.com/mariadb-operator/mariadb-operator/pkg/annotation"
 	labels "github.com/mariadb-operator/mariadb-operator/pkg/builder/labels"
 	metadata "github.com/mariadb-operator/mariadb-operator/pkg/builder/metadata"
 	galeraresources "github.com/mariadb-operator/mariadb-operator/pkg/controller/galera/resources"
-	"github.com/mariadb-operator/mariadb-operator/pkg/statefulset"
+	annotation "github.com/mariadb-operator/mariadb-operator/pkg/metadata"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 const (
-	StorageVolume           = "storage"
-	StorageMountPath        = "/var/lib/mysql"
+	StorageVolume            = "storage"
+	MariadbStorageMountPath  = "/var/lib/mysql"
+	MaxscaleStorageMountPath = "/var/lib/maxscale"
+	StorageVolumeRole        = "storage"
+
 	ConfigVolume            = "config"
-	ConfigMountPath         = "/etc/mysql/conf.d"
+	MariadbConfigMountPath  = "/etc/mysql/conf.d"
+	MaxscaleConfigMountPath = "/etc/config"
+	ConfigVolumeRole        = "config"
+
+	RunVolume            = "run"
+	MaxScaleRunMountPath = "/var/run/maxscale"
+
+	LogVolume            = "log"
+	MaxScaleLogMountPath = "/var/log/maxscale"
+
+	CacheVolume            = "cache"
+	MaxScaleCacheMountPath = "/var/cache/maxscale"
+
+	InitVolume        = "init"
+	InitConfigPath    = "/init"
+	InitLibKey        = "lib.sh"
+	InitEntrypointKey = "entrypoint.sh"
+
+	ProbesVolume    = "probes"
+	ProbesMountPath = "/etc/probes"
+
 	ServiceAccountVolume    = "serviceaccount"
 	ServiceAccountMountPath = "/var/run/secrets/kubernetes.io/serviceaccount"
 
-	MariaDbContainerName = "mariadb"
-	MariaDbPortName      = "mariadb"
-
-	InitContainerName  = "init"
-	AgentContainerName = "agent"
-
-	MetricsContainerName = "metrics"
-	MetricsPortName      = "metrics"
+	mysqlUser               = int64(999)
+	mysqlGroup              = int64(999)
+	maxscaleUser            = int64(998)
+	maxscaleGroup           = int64(996)
+	maxscaleEnterpriseUser  = int64(999)
+	maxscaleEnterpriseGroup = int64(999)
 )
 
-func PVCKey(mariadb *mariadbv1alpha1.MariaDB) types.NamespacedName {
-	podName := statefulset.PodName(mariadb.ObjectMeta, 0)
-	if mariadb.Replication().Enabled {
-		podName = statefulset.PodName(mariadb.ObjectMeta, *mariadb.Replication().Primary.PodIndex)
-	}
-	return types.NamespacedName{
-		Name:      fmt.Sprintf("%s-%s", StorageVolume, podName),
-		Namespace: mariadb.Namespace,
-	}
-}
-
-func StatefulSetPort(sts *appsv1.StatefulSet) (*corev1.ContainerPort, error) {
-	for _, c := range sts.Spec.Template.Spec.Containers {
-		if c.Name == MariaDbContainerName {
-			for _, p := range c.Ports {
-				if p.Name == MariaDbPortName {
-					return &p, nil
-				}
-			}
-		}
-	}
-	return nil, errors.New("StatefulSet port not found")
-}
-
-func (b *Builder) BuildStatefulSet(mariadb *mariadbv1alpha1.MariaDB, key types.NamespacedName,
-	dsn *corev1.SecretKeySelector) (*appsv1.StatefulSet, error) {
+func (b *Builder) BuildMariadbStatefulSet(mariadb *mariadbv1alpha1.MariaDB, key types.NamespacedName,
+	podAnnotations map[string]string) (*appsv1.StatefulSet, error) {
 	objMeta :=
 		metadata.NewMetadataBuilder(key).
-			WithMariaDB(mariadb).
-			WithAnnotations(buildHAAnnotations(mariadb)).
+			WithMetadata(mariadb.Spec.InheritMetadata).
+			WithAnnotations(mariadbHAAnnotations(mariadb)).
 			Build()
 	selectorLabels :=
 		labels.NewLabelsBuilder().
 			WithMariaDBSelectorLabels(mariadb).
 			Build()
-	podTemplate, err := b.buildStsPodTemplate(mariadb, dsn, selectorLabels)
+
+	updateStrategy, err := mariadbUpdateStrategy(mariadb)
 	if err != nil {
-		return nil, fmt.Errorf("error building pod template: %v", err)
+		return nil, err
+	}
+
+	var mariadbPodOpts []mariadbPodOpt
+	if podAnnotations != nil {
+		mariadbPodOpts = append(mariadbPodOpts,
+			withMeta(&mariadbv1alpha1.Metadata{
+				Annotations: podAnnotations,
+			}),
+		)
+	}
+	podTemplate, err := b.mariadbPodTemplate(mariadb, mariadbPodOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("error building MariaDB Pod template: %v", err)
 	}
 
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: objMeta,
 		Spec: appsv1.StatefulSetSpec{
-			ServiceName:         buildStsServiceName(mariadb),
+			ServiceName:         mariadb.InternalServiceKey().Name,
 			Replicas:            &mariadb.Spec.Replicas,
-			PodManagementPolicy: buildStsPodManagementPolicy(mariadb),
-			UpdateStrategy:      buildStsUpdateStrategy(mariadb),
+			PodManagementPolicy: appsv1.ParallelPodManagement,
+			UpdateStrategy:      *updateStrategy,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: selectorLabels,
 			},
 			Template:             *podTemplate,
-			VolumeClaimTemplates: buildStsVolumeClaimTemplates(mariadb),
+			VolumeClaimTemplates: mariadbVolumeClaimTemplates(mariadb),
 		},
 	}
 	if err := controllerutil.SetControllerReference(mariadb, sts, b.scheme); err != nil {
@@ -97,78 +105,108 @@ func (b *Builder) BuildStatefulSet(mariadb *mariadbv1alpha1.MariaDB, key types.N
 	return sts, nil
 }
 
-func (b *Builder) buildStsPodTemplate(mariadb *mariadbv1alpha1.MariaDB, dsn *corev1.SecretKeySelector,
-	labels map[string]string) (*corev1.PodTemplateSpec, error) {
-	containers, err := b.buildStsContainers(mariadb, dsn)
-	if err != nil {
-		return nil, fmt.Errorf("error building MariaDB containers: %v", err)
-	}
+func (b *Builder) BuildMaxscaleStatefulSet(maxscale *mariadbv1alpha1.MaxScale, key types.NamespacedName) (*appsv1.StatefulSet, error) {
 	objMeta :=
-		metadata.NewMetadataBuilder(client.ObjectKeyFromObject(mariadb)).
-			WithMariaDB(mariadb).
-			WithLabels(labels).
-			WithAnnotations(buildHAAnnotations(mariadb)).
+		metadata.NewMetadataBuilder(key).
+			WithMetadata(maxscale.Spec.InheritMetadata).
 			Build()
-	automount, serviceAccount := buildStsServiceAccountName(mariadb)
-	return &corev1.PodTemplateSpec{
+	selectorLabels :=
+		labels.NewLabelsBuilder().
+			WithMaxScaleSelectorLabels(maxscale).
+			Build()
+	podTemplate, err := b.maxscalePodTemplate(maxscale)
+	if err != nil {
+		return nil, err
+	}
+
+	sts := &appsv1.StatefulSet{
 		ObjectMeta: objMeta,
-		Spec: corev1.PodSpec{
-			AutomountServiceAccountToken: automount,
-			ServiceAccountName:           serviceAccount,
-			InitContainers:               buildStsInitContainers(mariadb),
-			Containers:                   containers,
-			ImagePullSecrets:             mariadb.Spec.ImagePullSecrets,
-			Volumes:                      buildStsVolumes(mariadb),
-			SecurityContext:              mariadb.Spec.PodSecurityContext,
-			Affinity:                     mariadb.Spec.Affinity,
-			NodeSelector:                 mariadb.Spec.NodeSelector,
-			Tolerations:                  mariadb.Spec.Tolerations,
+		Spec: appsv1.StatefulSetSpec{
+			ServiceName:         maxscale.InternalServiceKey().Name,
+			Replicas:            &maxscale.Spec.Replicas,
+			PodManagementPolicy: appsv1.ParallelPodManagement,
+			UpdateStrategy:      statefulSetUpdateStrategy(maxscale.Spec.UpdateStrategy),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: selectorLabels,
+			},
+			Template:             *podTemplate,
+			VolumeClaimTemplates: maxscaleVolumeClaimTemplates(maxscale),
 		},
-	}, nil
-}
-
-func buildStsServiceName(mariadb *mariadbv1alpha1.MariaDB) string {
-	if mariadb.IsHAEnabled() {
-		return ctrlresources.InternalServiceKey(mariadb).Name
 	}
-	return mariadb.Name
-}
-
-func buildStsPodManagementPolicy(mariadb *mariadbv1alpha1.MariaDB) appsv1.PodManagementPolicyType {
-	if mariadb.IsHAEnabled() {
-		return appsv1.ParallelPodManagement
+	if err := controllerutil.SetControllerReference(maxscale, sts, b.scheme); err != nil {
+		return nil, fmt.Errorf("error setting controller reference to StatefulSet: %v", err)
 	}
-	return appsv1.OrderedReadyPodManagement
+	return sts, nil
 }
 
-func buildStsUpdateStrategy(mariadb *mariadbv1alpha1.MariaDB) appsv1.StatefulSetUpdateStrategy {
-	if mariadb.Spec.UpdateStrategy != nil {
-		return *mariadb.Spec.UpdateStrategy
+func mariadbUpdateStrategy(mdb *mariadbv1alpha1.MariaDB) (*appsv1.StatefulSetUpdateStrategy, error) {
+	switch mdb.Spec.UpdateStrategy.Type {
+	case mariadbv1alpha1.ReplicasFirstPrimaryLast:
+		return &appsv1.StatefulSetUpdateStrategy{
+			Type: appsv1.OnDeleteStatefulSetStrategyType,
+		}, nil
+	case mariadbv1alpha1.RollingUpdateUpdateType:
+		return &appsv1.StatefulSetUpdateStrategy{
+			Type:          appsv1.RollingUpdateStatefulSetStrategyType,
+			RollingUpdate: mdb.Spec.UpdateStrategy.RollingUpdate,
+		}, nil
+	case mariadbv1alpha1.OnDeleteUpdateType:
+		return &appsv1.StatefulSetUpdateStrategy{
+			Type: appsv1.OnDeleteStatefulSetStrategyType,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported update strategy type: %v", mdb.Spec.UpdateStrategy.Type)
+	}
+}
+
+func statefulSetUpdateStrategy(strategy *appsv1.StatefulSetUpdateStrategy) appsv1.StatefulSetUpdateStrategy {
+	if strategy != nil {
+		return *strategy
 	}
 	return appsv1.StatefulSetUpdateStrategy{
 		Type: appsv1.RollingUpdateStatefulSetStrategyType,
 	}
 }
 
-func buildStsVolumeClaimTemplates(mariadb *mariadbv1alpha1.MariaDB) []corev1.PersistentVolumeClaim {
-	vctpl := mariadb.Spec.VolumeClaimTemplate
-	pvcs := []corev1.PersistentVolumeClaim{
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        StorageVolume,
-				Labels:      vctpl.Labels,
-				Annotations: vctpl.Annotations,
+func mariadbVolumeClaimTemplates(mariadb *mariadbv1alpha1.MariaDB) []corev1.PersistentVolumeClaim {
+	var pvcs []corev1.PersistentVolumeClaim
+	vctpl := mariadb.Spec.Storage.VolumeClaimTemplate
+
+	if !mariadb.IsEphemeralStorageEnabled() && vctpl != nil {
+		meta := ptr.Deref(vctpl.Metadata, mariadbv1alpha1.Metadata{})
+		labels := labels.NewLabelsBuilder().
+			WithLabels(meta.Labels).
+			WithPVCRole(StorageVolumeRole).
+			Build()
+
+		pvcs = []corev1.PersistentVolumeClaim{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        StorageVolume,
+					Labels:      labels,
+					Annotations: meta.Annotations,
+				},
+				Spec: vctpl.PersistentVolumeClaimSpec,
 			},
-			Spec: vctpl.PersistentVolumeClaimSpec,
-		},
+		}
 	}
-	if mariadb.Galera().Enabled {
-		vctpl := *mariadb.Galera().VolumeClaimTemplate
+
+	galera := ptr.Deref(mariadb.Spec.Galera, mariadbv1alpha1.Galera{})
+	reuseStorageVolume := ptr.Deref(galera.Config.ReuseStorageVolume, false)
+	vctpl = galera.Config.VolumeClaimTemplate
+
+	if mariadb.IsGaleraEnabled() && !reuseStorageVolume && vctpl != nil {
+		meta := ptr.Deref(vctpl.Metadata, mariadbv1alpha1.Metadata{})
+		labels := labels.NewLabelsBuilder().
+			WithLabels(meta.Labels).
+			WithPVCRole(ConfigVolumeRole).
+			Build()
+
 		pvcs = append(pvcs, corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        galeraresources.GaleraConfigVolume,
-				Labels:      vctpl.Labels,
-				Annotations: vctpl.Annotations,
+				Labels:      labels,
+				Annotations: meta.Annotations,
 			},
 			Spec: vctpl.PersistentVolumeClaimSpec,
 		})
@@ -176,91 +214,23 @@ func buildStsVolumeClaimTemplates(mariadb *mariadbv1alpha1.MariaDB) []corev1.Per
 	return pvcs
 }
 
-func buildStsServiceAccountName(mariadb *mariadbv1alpha1.MariaDB) (autoMount *bool, serviceAccount string) {
-	if mariadb.Galera().Enabled {
-		mount := false
-		autoMount = &mount
-		serviceAccount = mariadb.Name
-	}
-	return
-}
-
-func buildStsVolumes(mariadb *mariadbv1alpha1.MariaDB) []corev1.Volume {
-	configVolume := corev1.Volume{
-		Name: ConfigVolume,
-		VolumeSource: corev1.VolumeSource{
-			EmptyDir: &corev1.EmptyDirVolumeSource{},
+func maxscaleVolumeClaimTemplates(maxscale *mariadbv1alpha1.MaxScale) []corev1.PersistentVolumeClaim {
+	vctpl := maxscale.Spec.Config.VolumeClaimTemplate
+	meta := ptr.Deref(vctpl.Metadata, mariadbv1alpha1.Metadata{})
+	pvcs := []corev1.PersistentVolumeClaim{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        StorageVolume,
+				Labels:      meta.Labels,
+				Annotations: meta.Annotations,
+			},
+			Spec: vctpl.PersistentVolumeClaimSpec,
 		},
 	}
-	if mariadb.Spec.MyCnfConfigMapKeyRef != nil {
-		configVolume = corev1.Volume{
-			Name: ConfigVolume,
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: mariadb.Spec.MyCnfConfigMapKeyRef.Name,
-					},
-					Items: []corev1.KeyToPath{
-						{
-							Key:  mariadb.Spec.MyCnfConfigMapKeyRef.Key,
-							Path: "my.cnf",
-						},
-					},
-				},
-			},
-		}
-	}
-	volumes := []corev1.Volume{
-		configVolume,
-	}
-	if mariadb.Galera().Enabled {
-		volumes = append(volumes, corev1.Volume{
-			Name: ServiceAccountVolume,
-			VolumeSource: corev1.VolumeSource{
-				Projected: &corev1.ProjectedVolumeSource{
-					Sources: []corev1.VolumeProjection{
-						{
-							ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
-								Path: "token",
-							},
-						},
-						{
-							ConfigMap: &corev1.ConfigMapProjection{
-								Items: []corev1.KeyToPath{
-									{
-										Key:  "ca.crt",
-										Path: "ca.crt",
-									},
-								},
-								LocalObjectReference: corev1.LocalObjectReference{
-									Name: "kube-root-ca.crt",
-								},
-							},
-						},
-						{
-							DownwardAPI: &corev1.DownwardAPIProjection{
-								Items: []corev1.DownwardAPIVolumeFile{
-									{
-										FieldRef: &corev1.ObjectFieldSelector{
-											FieldPath: "metadata.namespace",
-										},
-										Path: "namespace",
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		})
-	}
-	if mariadb.Spec.Volumes != nil {
-		volumes = append(volumes, mariadb.Spec.Volumes...)
-	}
-	return volumes
+	return pvcs
 }
 
-func buildHAAnnotations(mariadb *mariadbv1alpha1.MariaDB) map[string]string {
+func mariadbHAAnnotations(mariadb *mariadbv1alpha1.MariaDB) map[string]string {
 	var annotations map[string]string
 	if mariadb.IsHAEnabled() {
 		annotations = map[string]string{
@@ -269,7 +239,7 @@ func buildHAAnnotations(mariadb *mariadbv1alpha1.MariaDB) map[string]string {
 		if mariadb.Replication().Enabled {
 			annotations[annotation.ReplicationAnnotation] = ""
 		}
-		if mariadb.Galera().Enabled {
+		if mariadb.IsGaleraEnabled() {
 			annotations[annotation.GaleraAnnotation] = ""
 		}
 	}

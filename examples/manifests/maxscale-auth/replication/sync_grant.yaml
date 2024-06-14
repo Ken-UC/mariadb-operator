@@ -1,0 +1,19 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Grant
+metadata:
+  name: maxscale-repl-sync
+spec:
+  mariaDbRef:
+    name: mariadb-repl
+  privileges:
+    - "SELECT"
+    - "INSERT"
+    - "UPDATE"
+    - "CREATE"
+    - "DROP"
+  database: "mysql"
+  table: "maxscale_config"
+  username: maxscale-repl-sync
+  grantOption: false
+  host: "%" 
+  retryInterval: 5s

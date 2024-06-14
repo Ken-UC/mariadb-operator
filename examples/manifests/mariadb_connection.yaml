@@ -1,0 +1,26 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: MariaDB
+metadata:
+  name: mariadb
+spec:
+  username: mariadb
+  database: mariadb
+  
+  connection:
+    secretName: connection-mariadb
+    secretTemplate:
+      key: dsn
+    healthCheck:
+      interval: 10s
+      retryInterval: 3s
+    params:
+      parseTime: "true"
+
+  storage:
+    size: 1Gi
+
+  service:
+    type: LoadBalancer
+    metadata:
+      annotations:
+        metallb.universe.tf/loadBalancerIPs: 172.18.0.20

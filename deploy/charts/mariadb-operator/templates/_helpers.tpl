@@ -71,28 +71,51 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Webhook certificate
+Webhook CA path to use cert-controller issued certificates
 */}}
-{{- define "mariadb-operator-webhook.certificate" -}}
-{{- if .Values.webhook.certificate.certManager }}
-{{- include "mariadb-operator.fullname" . }}-webhook-cert
-{{- else }}
-{{- include "mariadb-operator.fullname" . }}-webhook-default-cert
-{{- end }}
+{{- define "mariadb-operator-webhook.certControllerCAPath" -}}
+{{ .Values.webhook.cert.ca.path | default "/tmp/k8s-webhook-server/certificate-authority" }}
 {{- end }}
 
 {{/*
-Webhook certificate subject name
+Webhook CA full path to use cert-controller issued certificates
 */}}
-{{- define "mariadb-operator-webhook.subjectName" -}}
-{{- include "mariadb-operator.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
+{{- define "mariadb-operator-webhook.certControllerFullCAPath" -}}
+{{- printf "%s/%s" (include "mariadb-operator-webhook.certControllerCAPath" .) (.Values.webhook.cert.ca.key | default "tls.crt") }}
 {{- end }}
 
 {{/*
-Webhook certificate subject alternative name
+Webhook CA path to use cert-manager issued certificates
 */}}
-{{- define "mariadb-operator-webhook.altName" -}}
-{{- include "mariadb-operator.fullname" . }}-webhook.{{ .Release.Namespace }}.svc.{{ .Values.clusterName }}
+{{- define "mariadb-operator-webhook.certManagerCAPath" -}}
+{{ .Values.webhook.cert.ca.path | default .Values.webhook.cert.path }}
+{{- end }}
+
+{{/*
+Webhook CA full path to use cert-manager issued certificates
+*/}}
+{{- define "mariadb-operator-webhook.certManagerFullCAPath" -}}
+{{- printf "%s/%s" (include "mariadb-operator-webhook.certManagerCAPath" .) (.Values.webhook.cert.ca.key | default "ca.crt") }}
+{{- end }}
+
+{{/*
+Cert-controller common labels
+*/}}
+{{- define "mariadb-operator-cert-controller.labels" -}}
+helm.sh/chart: {{ include "mariadb-operator.chart" . }}
+{{ include "mariadb-operator-cert-controller.selectorLabels" . }}
+{{ if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{ end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+Cert-controller selector labels
+*/}}
+{{- define "mariadb-operator-cert-controller.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "mariadb-operator.name" . }}-cert-controller
+app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
@@ -114,5 +137,16 @@ Create the name of the webhook service account to use
 {{- default (printf "%s-webhook" (include "mariadb-operator.fullname" .))  .Values.webhook.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.webhook.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create the name of the cert-controller service account to use
+*/}}
+{{- define "mariadb-operator-cert-controller.serviceAccountName" -}}
+{{- if .Values.certController.serviceAccount.enabled }}
+{{- default (printf "%s-cert-controller" (include "mariadb-operator.fullname" .))  .Values.certController.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.certController.serviceAccount.name }}
 {{- end }}
 {{- end }}

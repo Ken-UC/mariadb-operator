@@ -1,0 +1,27 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: SqlJob
+metadata:
+  name: sqljob
+spec:
+  mariaDbRef:
+    name: mariadb
+  schedule:
+    cron: "*/1 * * * *"
+    suspend: false
+  username: mariadb
+  passwordSecretKeyRef:
+    name: mariadb
+    key: password
+  database: mariadb
+  sql: |
+    CREATE TABLE IF NOT EXISTS orders (
+      id bigint PRIMARY KEY AUTO_INCREMENT,
+      customer_id INT,
+      order_date DATE,
+      total_amount_cents INT
+    );
+    INSERT INTO orders (customer_id, order_date, total_amount_cents) VALUES
+      (101, '2024-05-15', 5000),
+      (102, '2024-05-14', 7525),
+      (103, '2024-05-13', 10050),
+      (104, '2024-05-12', 2575);

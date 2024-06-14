@@ -5,21 +5,22 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/mariadb-operator/agent/pkg/client"
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/api/v1alpha1"
-	ctrlresources "github.com/mariadb-operator/mariadb-operator/controllers/resources"
+	"github.com/mariadb-operator/mariadb-operator/pkg/galera/agent/client"
+	mdbhttp "github.com/mariadb-operator/mariadb-operator/pkg/http"
 	"github.com/mariadb-operator/mariadb-operator/pkg/statefulset"
+	"k8s.io/utils/ptr"
 )
 
 type agentClientSet struct {
 	mariadb       *mariadbv1alpha1.MariaDB
-	clientOpts    []client.Option
+	clientOpts    []mdbhttp.Option
 	clientByIndex map[int]*client.Client
 	mux           *sync.Mutex
 }
 
-func newAgentClientSet(mariadb *mariadbv1alpha1.MariaDB, opts ...client.Option) (*agentClientSet, error) {
-	if !mariadb.Galera().Enabled {
+func newAgentClientSet(mariadb *mariadbv1alpha1.MariaDB, opts ...mdbhttp.Option) (*agentClientSet, error) {
+	if !mariadb.IsGaleraEnabled() {
 		return nil, errors.New("'mariadb.spec.galera.enabled' should be enabled to create an agent agentClientSet")
 	}
 	return &agentClientSet{
@@ -62,8 +63,8 @@ func baseUrl(mariadb *mariadbv1alpha1.MariaDB, index int) string {
 		statefulset.PodFQDNWithService(
 			mariadb.ObjectMeta,
 			index,
-			ctrlresources.InternalServiceKey(mariadb).Name,
+			mariadb.InternalServiceKey().Name,
 		),
-		*mariadb.Galera().Agent.Port,
+		ptr.Deref(mariadb.Spec.Galera, mariadbv1alpha1.Galera{}).Agent.Port,
 	)
 }

@@ -1,25 +1,9 @@
-/*
-Copyright 2022.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package v1alpha1
 
 import (
 	"time"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,13 +13,106 @@ import (
 )
 
 var _ = Describe("Connection webhook", func() {
-	Context("When updating a Connection", func() {
-		It("Should validate", func() {
-			By("Creating Connection")
-			key := types.NamespacedName{
-				Name:      "conn-update",
-				Namespace: testNamespace,
-			}
+	Context("When creating a Connection", func() {
+		meta := metav1.ObjectMeta{
+			Name:      "connection-create-webhook",
+			Namespace: testNamespace,
+		}
+		DescribeTable(
+			"Should validate",
+			func(conn *Connection, wantErr bool) {
+				_ = k8sClient.Delete(testCtx, conn)
+				err := k8sClient.Create(testCtx, conn)
+				if wantErr {
+					Expect(err).To(HaveOccurred())
+				} else {
+					Expect(err).ToNot(HaveOccurred())
+				}
+			},
+			Entry(
+				"No refs",
+				&Connection{
+					ObjectMeta: meta,
+					Spec: ConnectionSpec{
+						Username: "foo",
+						PasswordSecretKeyRef: corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: "foo",
+							},
+						},
+					},
+				},
+				true,
+			),
+			Entry(
+				"MariaDB ref",
+				&Connection{
+					ObjectMeta: meta,
+					Spec: ConnectionSpec{
+						MariaDBRef: &MariaDBRef{
+							ObjectReference: corev1.ObjectReference{
+								Name: "foo",
+							},
+						},
+						Username: "foo",
+						PasswordSecretKeyRef: corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: "foo",
+							},
+						},
+					},
+				},
+				false,
+			),
+			Entry(
+				"MaxScale ref",
+				&Connection{
+					ObjectMeta: meta,
+					Spec: ConnectionSpec{
+						MaxScaleRef: &corev1.ObjectReference{
+							Name: "foo",
+						},
+						Username: "foo",
+						PasswordSecretKeyRef: corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: "foo",
+							},
+						},
+					},
+				},
+				false,
+			),
+			Entry(
+				"MariaDB and MaxScale refs",
+				&Connection{
+					ObjectMeta: meta,
+					Spec: ConnectionSpec{
+						MaxScaleRef: &corev1.ObjectReference{
+							Name: "foo",
+						},
+						MariaDBRef: &MariaDBRef{
+							ObjectReference: corev1.ObjectReference{
+								Name: "foo",
+							},
+						},
+						Username: "foo",
+						PasswordSecretKeyRef: corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: "foo",
+							},
+						},
+					},
+				},
+				true,
+			),
+		)
+	})
+	Context("When updating a Connection", Ordered, func() {
+		key := types.NamespacedName{
+			Name:      "conn-update",
+			Namespace: testNamespace,
+		}
+		BeforeAll(func() {
 			conn := Connection{
 				ObjectMeta: v1.ObjectMeta{
 					Name:      key.Name,
@@ -45,8 +122,10 @@ var _ = Describe("Connection webhook", func() {
 					ConnectionTemplate: ConnectionTemplate{
 						SecretName: func() *string { t := "test"; return &t }(),
 						SecretTemplate: &SecretTemplate{
-							Labels: map[string]string{
-								"foo": "bar",
+							Metadata: &Metadata{
+								Labels: map[string]string{
+									"foo": "bar",
+								},
 							},
 						},
 						HealthCheck: &HealthCheck{
@@ -54,7 +133,7 @@ var _ = Describe("Connection webhook", func() {
 							RetryInterval: &metav1.Duration{Duration: 1 * time.Second},
 						},
 					},
-					MariaDBRef: MariaDBRef{
+					MariaDBRef: &MariaDBRef{
 						ObjectReference: corev1.ObjectReference{
 							Name: "mariadb-webhook",
 						},
@@ -71,82 +150,76 @@ var _ = Describe("Connection webhook", func() {
 				},
 			}
 			Expect(k8sClient.Create(testCtx, &conn)).To(Succeed())
+		})
 
-			// TODO: migrate to Ginkgo v2 and use Ginkgo table tests
-			// https://github.com/mariadb-operator/mariadb-operator/issues/3
-			tt := []struct {
-				by      string
-				patchFn func(conn *Connection)
-				wantErr bool
-			}{
-				{
-					by: "Updating MariaDBRef",
-					patchFn: func(conn *Connection) {
-						conn.Spec.MariaDBRef.Name = "foo"
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating Username",
-					patchFn: func(conn *Connection) {
-						conn.Spec.Username = "foo"
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating PasswordSecretKeyRef",
-					patchFn: func(conn *Connection) {
-						conn.Spec.PasswordSecretKeyRef.Key = "foo"
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating Database",
-					patchFn: func(conn *Connection) {
-						conn.Spec.Database = func() *string { t := "foo"; return &t }()
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating SecretName",
-					patchFn: func(conn *Connection) {
-						conn.Spec.SecretName = func() *string { s := "foo"; return &s }()
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating SecretTemplate",
-					patchFn: func(conn *Connection) {
-						conn.Spec.SecretTemplate.Labels = map[string]string{
-							"foo": "foo",
-						}
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating HealthCheck",
-					patchFn: func(conn *Connection) {
-						conn.Spec.HealthCheck.Interval = &metav1.Duration{Duration: 3 * time.Second}
-						conn.Spec.HealthCheck.RetryInterval = &metav1.Duration{Duration: 3 * time.Second}
-					},
-					wantErr: false,
-				},
-			}
-
-			for _, t := range tt {
-				By(t.by)
+		DescribeTable(
+			"Should validate",
+			func(patchFn func(conn *Connection), wantErr bool) {
+				var conn Connection
 				Expect(k8sClient.Get(testCtx, key, &conn)).To(Succeed())
 
 				patch := client.MergeFrom(conn.DeepCopy())
-				t.patchFn(&conn)
+				patchFn(&conn)
 
 				err := k8sClient.Patch(testCtx, &conn, patch)
-				if t.wantErr {
+				if wantErr {
 					Expect(err).To(HaveOccurred())
 				} else {
 					Expect(err).ToNot(HaveOccurred())
 				}
-			}
-		})
+			},
+			Entry(
+				"Updating MariaDBRef",
+				func(conn *Connection) {
+					conn.Spec.MariaDBRef.Name = "foo"
+				},
+				false,
+			),
+			Entry(
+				"Updating Username",
+				func(conn *Connection) {
+					conn.Spec.Username = "foo"
+				},
+				false,
+			),
+			Entry(
+				"Updating PasswordSecretKeyRef",
+				func(conn *Connection) {
+					conn.Spec.PasswordSecretKeyRef.Key = "foo"
+				},
+				false,
+			),
+			Entry(
+				"Updating Database",
+				func(conn *Connection) {
+					conn.Spec.Database = func() *string { t := "foo"; return &t }()
+				},
+				false,
+			),
+			Entry(
+				"Updating SecretName",
+				func(conn *Connection) {
+					conn.Spec.SecretName = func() *string { s := "foo"; return &s }()
+				},
+				true,
+			),
+			Entry(
+				"Updating SecretTemplate",
+				func(conn *Connection) {
+					conn.Spec.SecretTemplate.Metadata.Labels = map[string]string{
+						"foo": "foo",
+					}
+				},
+				false,
+			),
+			Entry(
+				"Updating HealthCheck",
+				func(conn *Connection) {
+					conn.Spec.HealthCheck.Interval = &metav1.Duration{Duration: 3 * time.Second}
+					conn.Spec.HealthCheck.RetryInterval = &metav1.Duration{Duration: 3 * time.Second}
+				},
+				false,
+			),
+		)
 	})
 })

@@ -1,20 +1,21 @@
 package builder
 
 import (
+	"errors"
 	"fmt"
 
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/api/v1alpha1"
-	labels "github.com/mariadb-operator/mariadb-operator/pkg/builder/labels"
 	metadata "github.com/mariadb-operator/mariadb-operator/pkg/builder/metadata"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 func MariaDBPort(svc *corev1.Service) (*v1.ServicePort, error) {
 	for _, p := range svc.Spec.Ports {
-		if p.Name == MariaDbPortName {
+		if p.Name == MariadbPortName {
 			return &p, nil
 		}
 	}
@@ -22,27 +23,22 @@ func MariaDBPort(svc *corev1.Service) (*v1.ServicePort, error) {
 }
 
 type ServiceOpts struct {
-	Selectorlabels           map[string]string
-	ExcludeSelectorLabels    bool
-	Annotations              map[string]string
-	Type                     corev1.ServiceType
-	Ports                    []corev1.ServicePort
-	ClusterIP                *string
-	PublishNotReadyAddresses *bool
+	mariadbv1alpha1.ServiceTemplate
+	SelectorLabels        map[string]string
+	ExcludeSelectorLabels bool
+	Ports                 []corev1.ServicePort
+	Headless              bool
+	ExtraMeta             *mariadbv1alpha1.Metadata
 }
 
-func (b *Builder) BuildService(mariadb *mariadbv1alpha1.MariaDB, key types.NamespacedName,
-	opts ServiceOpts) (*corev1.Service, error) {
-	selectorLabels :=
-		labels.NewLabelsBuilder().
-			WithMariaDBSelectorLabels(mariadb).
-			WithLabels(opts.Selectorlabels).
-			Build()
+func (b *Builder) BuildService(key types.NamespacedName, owner metav1.Object, opts ServiceOpts) (*corev1.Service, error) {
+	if !opts.ExcludeSelectorLabels && opts.SelectorLabels == nil {
+		return nil, errors.New("SelectorLabels are mandatory when ExcludeSelectorLabels is set to false")
+	}
 	objMeta :=
 		metadata.NewMetadataBuilder(key).
-			WithMariaDB(mariadb).
-			WithAnnotations(opts.Annotations).
-			WithLabels(selectorLabels).
+			WithMetadata(opts.ExtraMeta).
+			WithMetadata(opts.Metadata).
 			Build()
 	svc := &corev1.Service{
 		ObjectMeta: objMeta,
@@ -51,16 +47,29 @@ func (b *Builder) BuildService(mariadb *mariadbv1alpha1.MariaDB, key types.Names
 			Ports: opts.Ports,
 		},
 	}
-	if opts.ClusterIP != nil {
-		svc.Spec.ClusterIP = *opts.ClusterIP
-	}
-	if opts.PublishNotReadyAddresses != nil {
-		svc.Spec.PublishNotReadyAddresses = *opts.PublishNotReadyAddresses
+	if opts.Headless {
+		svc.Spec.ClusterIP = "None"
+		svc.Spec.PublishNotReadyAddresses = true
 	}
 	if !opts.ExcludeSelectorLabels {
-		svc.Spec.Selector = selectorLabels
+		svc.Spec.Selector = opts.SelectorLabels
 	}
-	if err := controllerutil.SetControllerReference(mariadb, svc, b.scheme); err != nil {
+	if opts.LoadBalancerIP != nil {
+		svc.Spec.LoadBalancerIP = *opts.LoadBalancerIP
+	}
+	if opts.LoadBalancerSourceRanges != nil {
+		svc.Spec.LoadBalancerSourceRanges = opts.LoadBalancerSourceRanges
+	}
+	if opts.ExternalTrafficPolicy != nil {
+		svc.Spec.ExternalTrafficPolicy = *opts.ExternalTrafficPolicy
+	}
+	if opts.SessionAffinity != nil {
+		svc.Spec.SessionAffinity = *opts.SessionAffinity
+	}
+	if opts.AllocateLoadBalancerNodePorts != nil {
+		svc.Spec.AllocateLoadBalancerNodePorts = opts.AllocateLoadBalancerNodePorts
+	}
+	if err := controllerutil.SetControllerReference(owner, svc, b.scheme); err != nil {
 		return nil, fmt.Errorf("error setting controller reference to Service: %v", err)
 	}
 	return svc, nil

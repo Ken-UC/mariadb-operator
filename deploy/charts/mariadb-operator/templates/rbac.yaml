@@ -48,6 +48,7 @@ rules:
   - configmaps
   verbs:
   - create
+  - delete
   - get
   - list
   - patch
@@ -56,6 +57,16 @@ rules:
   - ""
   resources:
   - endpoints
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - endpoints/restricted
   verbs:
   - create
   - get
@@ -77,6 +88,7 @@ rules:
   - persistentvolumeclaims
   verbs:
   - create
+  - deletecollection
   - list
   - patch
   - watch
@@ -119,13 +131,35 @@ rules:
 - apiGroups:
   - apps
   resources:
+  - deployments
+  verbs:
+  - create
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - apps
+  resources:
   - statefulsets
   verbs:
   - create
+  - delete
   - get
   - list
   - patch
   - watch
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
 - apiGroups:
   - batch
   resources:
@@ -141,11 +175,12 @@ rules:
   - jobs
   verbs:
   - create
+  - delete
   - list
   - patch
   - watch
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - backups
   verbs:
@@ -157,13 +192,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - backups/finalizers
   verbs:
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - backups/status
   verbs:
@@ -171,7 +206,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - connections
   verbs:
@@ -183,23 +218,37 @@ rules:
   - update
   - watch
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - connections
+  - grants
+  - maxscale
   - restores
+  - users
   verbs:
   - create
   - list
   - patch
   - watch
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
+  resources:
+  - connections
+  - grants
+  - users
+  verbs:
+  - create
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - k8s.mariadb.com
   resources:
   - connections/finalizers
   verbs:
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - connections/status
   verbs:
@@ -207,7 +256,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - databases
   verbs:
@@ -219,13 +268,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - databases/finalizers
   verbs:
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - databases/status
   verbs:
@@ -233,7 +282,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - grants
   verbs:
@@ -245,13 +294,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - grants/finalizers
   verbs:
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - grants/status
   verbs:
@@ -259,7 +308,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - mariadbs
   verbs:
@@ -271,13 +320,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - mariadbs/finalizers
   verbs:
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - mariadbs/status
   verbs:
@@ -285,7 +334,33 @@ rules:
   - patch
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
+  resources:
+  - maxscales
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - k8s.mariadb.com
+  resources:
+  - maxscales/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - k8s.mariadb.com
+  resources:
+  - maxscales/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - k8s.mariadb.com
   resources:
   - restores
   verbs:
@@ -297,13 +372,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - restores/finalizers
   verbs:
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - restores/status
   verbs:
@@ -311,7 +386,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - sqljobs
   verbs:
@@ -323,13 +398,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - sqljobs/finalizers
   verbs:
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - sqljobs/status
   verbs:
@@ -337,7 +412,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - users
   verbs:
@@ -349,13 +424,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - users/finalizers
   verbs:
   - update
 - apiGroups:
-  - mariadb.mmontes.io
+  - k8s.mariadb.com
   resources:
   - users/status
   verbs:

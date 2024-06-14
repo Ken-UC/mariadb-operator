@@ -1,24 +1,37 @@
 package v1alpha1
 
 const (
-	ConditionTypeReady                 string = "Ready"
-	ConditionTypeBackupRestored        string = "BackupRestored"
-	ConditionTypeReplicationConfigured string = "ReplicationConfigured"
-	ConditionTypePrimarySwitched       string = "PrimarySwitched"
+	ConditionTypeReady           string = "Ready"
+	ConditionTypeBackupRestored  string = "BackupRestored"
+	ConditionTypePrimarySwitched string = "PrimarySwitched"
 	// ConditionTypeGaleraReady indicates that the cluster is healthy.
 	ConditionTypeGaleraReady string = "GaleraReady"
 	// ConditionTypeGaleraConfigured indicates that the cluster has been successfully configured.
 	ConditionTypeGaleraConfigured string = "GaleraConfigured"
 	ConditionTypeComplete         string = "Complete"
+	// ConditionTypeStorageResized indicates that the storage has been successfully resized.
+	ConditionTypeStorageResized string = "StorageResized"
+	// ConditionTypeUpdated indicates that an update has been successfully completed.
+	ConditionTypeUpdated string = "Updated"
 
-	ConditionReasonStatefulSetNotReady  string = "StatefulSetNotReady"
-	ConditionReasonStatefulSetReady     string = "StatefulSetReady"
-	ConditionReasonRestoreBackup        string = "RestoreBackup"
-	ConditionReasonConfigureReplication string = "ConfigureReplication"
-	ConditionReasonSwitchPrimary        string = "SwitchPrimary"
-	ConditionReasonGaleraReady          string = "GaleraReady"
-	ConditionReasonGaleraNotReady       string = "GaleraNotReady"
-	ConditionReasonGaleraConfigured     string = "GaleraConfigured"
+	ConditionReasonStatefulSetNotReady string = "StatefulSetNotReady"
+	ConditionReasonStatefulSetReady    string = "StatefulSetReady"
+	ConditionReasonRestoreBackup       string = "RestoreBackup"
+	ConditionReasonSwitchPrimary       string = "SwitchPrimary"
+	ConditionReasonGaleraReady         string = "GaleraReady"
+	ConditionReasonGaleraNotReady      string = "GaleraNotReady"
+	ConditionReasonGaleraConfigured    string = "GaleraConfigured"
+	ConditionReasonResizingStorage     string = "ResizingStorage"
+	ConditionReasonWaitStorageResize   string = "WaitStorageResize"
+	ConditionReasonStorageResized      string = "StorageResized"
+	ConditionReasonInitializing        string = "Initializing"
+	ConditionReasonInitialized         string = "Initialized"
+	ConditionReasonPendingUpdate       string = "PendingUpdate"
+	ConditionReasonUpdating            string = "Updating"
+	ConditionReasonUpdated             string = "Updated"
+
+	ConditionReasonMaxScaleNotReady string = "MaxScaleNotReady"
+	ConditionReasonMaxScaleReady    string = "MaxScaleReady"
 
 	ConditionReasonRestoreNotComplete string = "RestoreNotComplete"
 	ConditionReasonRestoreComplete    string = "RestoreComplete"

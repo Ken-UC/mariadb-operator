@@ -1,0 +1,103 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: MaxScale
+metadata:
+  name: maxscale-galera
+spec:
+  replicas: 3
+
+  servers:
+    - name: mariadb-0
+      address: 172.18.0.140
+      port: 3306
+      protocol: MariaDBBackend
+      maintenance: false
+    - name: mariadb-1
+      address: 172.18.0.141
+    - name: mariadb-2
+      address: 172.18.0.142
+
+  services:
+    - name: rw-router
+      router: readwritesplit
+      params:
+        transaction_replay: "true"
+        transaction_replay_attempts: "10"
+        transaction_replay_timeout: "5s"
+        max_slave_connections: "255"
+        max_replication_lag: "3s"
+        master_accept_reads: "true"
+      listener:
+        port: 3306
+        protocol: MariaDBProtocol
+        params:
+          connection_metadata: "tx_isolation=auto"
+    - name: rconn-master-router
+      router: readconnroute
+      params:
+        router_options: "master"
+        max_replication_lag: "3s"
+        master_accept_reads: "true"
+      listener:
+        port: 3307
+    - name: rconn-slave-router
+      router: readconnroute
+      params:
+        router_options: "slave"
+        max_replication_lag: "3s"
+      listener:
+        port: 3308
+
+  monitor:
+    name: mariadb-monitor
+    module: galeramon
+    interval: 2s
+    cooperativeMonitoring: majority_of_all
+    params:
+      disable_master_failback: "false"
+      available_when_donor: "false"
+      disable_master_role_setting: "false"   
+    suspend: false
+
+  admin:
+    port: 8989
+
+  config:
+    sync:
+      database: mysql
+      interval: 5s
+      timeout: 10s
+
+  auth:
+    generate: false
+    adminUsername: mariadb-operator
+    adminPasswordSecretKeyRef:
+      name: maxscale
+      key: password
+    clientUsername: maxscale-galera-client
+    clientPasswordSecretKeyRef:
+      name: maxscale
+      key: password
+    serverUsername: maxscale-galera-server
+    serverPasswordSecretKeyRef:
+      name: maxscale
+      key: password
+    monitorUsername: maxscale-galera-monitor
+    monitorPasswordSecretKeyRef:
+      name: maxscale
+      key: password
+    syncUsername: maxscale-galera-sync
+    syncPasswordSecretKeyRef:
+      name: maxscale
+      key: password
+
+  kubernetesService:
+    type: LoadBalancer
+    metadata:
+      annotations:
+        metallb.universe.tf/loadBalancerIPs: 172.18.0.224
+
+  connection:
+    secretName: mxs-galera-conn
+    port: 3306
+
+  requeueInterval: 10s

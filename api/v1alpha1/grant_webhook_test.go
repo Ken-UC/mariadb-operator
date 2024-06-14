@@ -1,23 +1,7 @@
-/*
-Copyright 2022.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package v1alpha1
 
 import (
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,13 +10,12 @@ import (
 )
 
 var _ = Describe("Grant webhook", func() {
-	Context("When updating a Grant", func() {
-		It("Should validate", func() {
-			By("Creating Grant")
-			key := types.NamespacedName{
-				Name:      "grant-mariadb-webhook",
-				Namespace: testNamespace,
-			}
+	Context("When updating a Grant", Ordered, func() {
+		key := types.NamespacedName{
+			Name:      "grant-mariadb-webhook",
+			Namespace: testNamespace,
+		}
+		BeforeAll(func() {
 			grant := Grant{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      key.Name,
@@ -55,75 +38,69 @@ var _ = Describe("Grant webhook", func() {
 				},
 			}
 			Expect(k8sClient.Create(testCtx, &grant)).To(Succeed())
+		})
 
-			// TODO: migrate to Ginkgo v2 and use Ginkgo table tests
-			// https://github.com/mariadb-operator/mariadb-operator/issues/3
-			tt := []struct {
-				by      string
-				patchFn func(mdb *Grant)
-				wantErr bool
-			}{
-				{
-					by: "Updating MariaDBRef",
-					patchFn: func(gmdb *Grant) {
-						gmdb.Spec.MariaDBRef.Name = "another-mariadb"
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating Privileges",
-					patchFn: func(gmdb *Grant) {
-						gmdb.Spec.Privileges = []string{
-							"SELECT",
-							"UPDATE",
-						}
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating Database",
-					patchFn: func(gmdb *Grant) {
-						gmdb.Spec.Database = "bar"
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating Table",
-					patchFn: func(gmdb *Grant) {
-						gmdb.Spec.Table = "bar"
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating Username",
-					patchFn: func(gmdb *Grant) {
-						gmdb.Spec.Username = "bar"
-					},
-					wantErr: true,
-				},
-				{
-					by: "Updating GrantOption",
-					patchFn: func(gmdb *Grant) {
-						gmdb.Spec.GrantOption = true
-					},
-					wantErr: true,
-				},
-			}
-
-			for _, t := range tt {
-				By(t.by)
+		DescribeTable(
+			"Should validate",
+			func(patchFn func(grant *Grant), wantErr bool) {
+				var grant Grant
 				Expect(k8sClient.Get(testCtx, key, &grant)).To(Succeed())
 
 				patch := client.MergeFrom(grant.DeepCopy())
-				t.patchFn(&grant)
+				patchFn(&grant)
 
 				err := k8sClient.Patch(testCtx, &grant, patch)
-				if t.wantErr {
+				if wantErr {
 					Expect(err).To(HaveOccurred())
 				} else {
 					Expect(err).ToNot(HaveOccurred())
 				}
-			}
-		})
+			},
+			Entry(
+				"Updating MariaDBRef",
+				func(grant *Grant) {
+					grant.Spec.MariaDBRef.Name = "another-mariadb"
+				},
+				true,
+			),
+			Entry(
+				"Updating Privileges",
+				func(grant *Grant) {
+					grant.Spec.Privileges = []string{
+						"SELECT",
+						"UPDATE",
+					}
+				},
+				true,
+			),
+			Entry(
+				"Updating Database",
+				func(grant *Grant) {
+					grant.Spec.Database = "bar"
+				},
+				true,
+			),
+			Entry(
+				"Updating Table",
+				func(grant *Grant) {
+					grant.Spec.Table = "bar"
+				},
+				true,
+			),
+			Entry(
+				"Updating Username",
+				func(grant *Grant) {
+					grant.Spec.Username = "bar"
+				},
+				true,
+			),
+			Entry(
+				"Updating GrantOption",
+				func(grant *Grant) {
+					grant.Spec.GrantOption = true
+				},
+				true,
+			),
+		)
 	})
 })

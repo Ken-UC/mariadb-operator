@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/api/v1alpha1"
-	ctrlresources "github.com/mariadb-operator/mariadb-operator/controllers/resources"
 	"github.com/mariadb-operator/mariadb-operator/pkg/statefulset"
 )
 
@@ -20,7 +19,14 @@ type CommandOpts struct {
 	Database    *string
 }
 
-func ExecCommand(args []string) *Command {
+func NewCommand(cmd, args []string) *Command {
+	return &Command{
+		Command: cmd,
+		Args:    args,
+	}
+}
+
+func NewBashCommand(args []string) *Command {
 	return &Command{
 		Command: []string{"bash", "-c"},
 		Args:    []string{strings.Join(args, ";")},
@@ -45,7 +51,7 @@ func host(mariadb *mariadbv1alpha1.MariaDB) string {
 	if mariadb.Replication().Enabled {
 		return statefulset.ServiceFQDNWithService(
 			mariadb.ObjectMeta,
-			ctrlresources.PrimaryServiceKey(mariadb).Name,
+			mariadb.PrimaryServiceKey().Name,
 		)
 	}
 	return statefulset.ServiceFQDN(mariadb.ObjectMeta)

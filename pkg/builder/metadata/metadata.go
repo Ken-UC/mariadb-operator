@@ -21,14 +21,23 @@ func NewMetadataBuilder(key types.NamespacedName) *MetadataBuilder {
 	}
 }
 
-func (b *MetadataBuilder) WithMariaDB(mariadb *mariadbv1alpha1.MariaDB) *MetadataBuilder {
-	if mariadb.Spec.InheritMetadata == nil {
+func (b *MetadataBuilder) WithReleaseLabel(release string) *MetadataBuilder {
+	if release == "" {
 		return b
 	}
-	for k, v := range mariadb.Spec.InheritMetadata.Labels {
+	return b.WithLabels(map[string]string{
+		"release": release,
+	})
+}
+
+func (b *MetadataBuilder) WithMetadata(meta *mariadbv1alpha1.Metadata) *MetadataBuilder {
+	if meta == nil {
+		return b
+	}
+	for k, v := range meta.Labels {
 		b.objMeta.Labels[k] = v
 	}
-	for k, v := range mariadb.Spec.InheritMetadata.Annotations {
+	for k, v := range meta.Annotations {
 		b.objMeta.Annotations[k] = v
 	}
 	return b

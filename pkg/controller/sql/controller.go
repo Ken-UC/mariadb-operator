@@ -2,113 +2,190 @@ package sql
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"time"
 
 	"github.com/hashicorp/go-multierror"
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/api/v1alpha1"
-	mariadbclient "github.com/mariadb-operator/mariadb-operator/pkg/client"
-	"github.com/mariadb-operator/mariadb-operator/pkg/conditions"
+	condition "github.com/mariadb-operator/mariadb-operator/pkg/condition"
 	"github.com/mariadb-operator/mariadb-operator/pkg/health"
 	"github.com/mariadb-operator/mariadb-operator/pkg/refresolver"
+	sqlClient "github.com/mariadb-operator/mariadb-operator/pkg/sql"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	clientpkg "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
+
+type SqlOptions struct {
+	RequeueInterval time.Duration
+	LogSql          bool
+}
+
+type SqlOpt func(*SqlOptions)
+
+func WithRequeueInterval(interval time.Duration) SqlOpt {
+	return func(opts *SqlOptions) {
+		opts.RequeueInterval = interval
+	}
+}
+
+func WithLogSql(logSql bool) SqlOpt {
+	return func(opts *SqlOptions) {
+		opts.LogSql = logSql
+	}
+}
 
 type SqlReconciler struct {
 	Client         client.Client
 	RefResolver    *refresolver.RefResolver
-	ConditionReady *conditions.Ready
+	ConditionReady *condition.Ready
 
 	WrappedReconciler WrappedReconciler
 	Finalizer         Finalizer
+
+	SqlOptions
 }
 
-func NewSqlReconciler(client client.Client, cr *conditions.Ready, wr WrappedReconciler, f Finalizer) Reconciler {
-	return &SqlReconciler{
+func NewSqlReconciler(client client.Client, cr *condition.Ready, wr WrappedReconciler, f Finalizer,
+	opts ...SqlOpt) Reconciler {
+	reconciler := &SqlReconciler{
 		Client:            client,
 		RefResolver:       refresolver.New(client),
 		ConditionReady:    cr,
 		WrappedReconciler: wr,
 		Finalizer:         f,
+		SqlOptions: SqlOptions{
+			RequeueInterval: 30 * time.Second,
+			LogSql:          false,
+		},
 	}
+	for _, setOpt := range opts {
+		setOpt(&reconciler.SqlOptions)
+	}
+	return reconciler
 }
 
-func (tr *SqlReconciler) Reconcile(ctx context.Context, resource Resource) (ctrl.Result, error) {
+func (r *SqlReconciler) Reconcile(ctx context.Context, resource Resource) (ctrl.Result, error) {
 	if resource.IsBeingDeleted() {
-		if err := tr.Finalizer.Finalize(ctx, resource); err != nil {
-			return ctrl.Result{}, fmt.Errorf("error finalizing %s: %v", resource.GetName(), err)
+		if result, err := r.Finalizer.Finalize(ctx, resource); !result.IsZero() || err != nil {
+			return result, err
 		}
 		return ctrl.Result{}, nil
 	}
 
-	mariadb, err := tr.RefResolver.MariaDB(ctx, resource.MariaDBRef(), resource.GetNamespace())
+	mariadb, err := r.RefResolver.MariaDB(ctx, resource.MariaDBRef(), resource.GetNamespace())
 	if err != nil {
-		var mariadbErr *multierror.Error
-		mariadbErr = multierror.Append(mariadbErr, err)
-
-		err = tr.WrappedReconciler.PatchStatus(ctx, tr.ConditionReady.PatcherRefResolver(err, mariadb))
-		mariadbErr = multierror.Append(mariadbErr, err)
-
-		return ctrl.Result{}, fmt.Errorf("error getting MariaDB: %v", mariadbErr)
-	}
-
-	if err := waitForMariaDB(ctx, tr.Client, resource, mariadb); err != nil {
 		var errBundle *multierror.Error
 		errBundle = multierror.Append(errBundle, err)
 
-		if err := tr.WrappedReconciler.PatchStatus(ctx, tr.ConditionReady.PatcherWithError(err)); err != nil {
+		err = r.WrappedReconciler.PatchStatus(ctx, r.ConditionReady.PatcherRefResolver(err, mariadb))
+		errBundle = multierror.Append(errBundle, err)
+
+		return ctrl.Result{}, fmt.Errorf("error getting MariaDB: %v", errBundle)
+	}
+
+	if result, err := waitForMariaDB(ctx, r.Client, mariadb, r.LogSql); !result.IsZero() || err != nil {
+		var errBundle *multierror.Error
+
+		if err != nil {
+			errBundle = multierror.Append(errBundle, err)
+
+			err := r.WrappedReconciler.PatchStatus(ctx, r.ConditionReady.PatcherWithError(err))
 			errBundle = multierror.Append(errBundle, err)
 		}
 
-		if err := errBundle.ErrorOrNil(); err != nil {
-			return ctrl.Result{}, fmt.Errorf("error waiting for MariaDB: %v", err)
-		}
+		return result, errBundle.ErrorOrNil()
 	}
 
 	// TODO: connection pooling. See https://github.com/mariadb-operator/mariadb-operator/issues/7.
-	mdbClient, err := mariadbclient.NewClientWithMariaDB(ctx, mariadb, tr.RefResolver)
+	mdbClient, err := sqlClient.NewClientWithMariaDB(ctx, mariadb, r.RefResolver)
 	if err != nil {
 		var errBundle *multierror.Error
 		errBundle = multierror.Append(errBundle, err)
 
-		err = tr.WrappedReconciler.PatchStatus(ctx, tr.ConditionReady.PatcherFailed("Error connecting to MariaDB"))
+		msg := fmt.Sprintf("Error connecting to MariaDB: %v", err)
+		err = r.WrappedReconciler.PatchStatus(ctx, r.ConditionReady.PatcherFailed(msg))
 		errBundle = multierror.Append(errBundle, err)
 
-		return ctrl.Result{}, fmt.Errorf("error creating MariaDB client: %v", errBundle)
+		return r.retryResult(ctx, resource, errBundle)
 	}
 	defer mdbClient.Close()
 
+	err = r.WrappedReconciler.Reconcile(ctx, mdbClient)
 	var errBundle *multierror.Error
-	err = tr.WrappedReconciler.Reconcile(ctx, mdbClient)
-	errBundle = multierror.Append(errBundle, err)
-
-	err = tr.WrappedReconciler.PatchStatus(ctx, tr.ConditionReady.PatcherWithError(err))
 	errBundle = multierror.Append(errBundle, err)
 
 	if err := errBundle.ErrorOrNil(); err != nil {
-		return ctrl.Result{}, fmt.Errorf("error creating %s: %v", resource.GetName(), err)
+		msg := fmt.Sprintf("Error creating %s: %v", resource.GetName(), err)
+		err = r.WrappedReconciler.PatchStatus(ctx, r.ConditionReady.PatcherFailed(msg))
+		errBundle = multierror.Append(errBundle, err)
+
+		return r.retryResult(ctx, resource, errBundle)
 	}
 
-	if err := tr.Finalizer.AddFinalizer(ctx); err != nil {
-		return ctrl.Result{}, fmt.Errorf("error adding finalizer to %s: %v", resource.GetName(), err)
+	if err = r.Finalizer.AddFinalizer(ctx); err != nil {
+		errBundle = multierror.Append(errBundle, fmt.Errorf("error adding finalizer to %s: %v", resource.GetName(), err))
 	}
 
+	err = r.WrappedReconciler.PatchStatus(ctx, r.ConditionReady.PatcherWithError(errBundle.ErrorOrNil()))
+	errBundle = multierror.Append(errBundle, err)
+
+	return r.requeueResult(ctx, resource, errBundle.ErrorOrNil())
+}
+
+func (r *SqlReconciler) retryResult(ctx context.Context, resource Resource, err error) (ctrl.Result, error) {
+	if resource.RetryInterval() != nil {
+		log.FromContext(ctx).Error(err, "Error reconciling SQL resource", "resource", resource.GetName())
+		return ctrl.Result{RequeueAfter: resource.RetryInterval().Duration}, nil
+	}
+	if err != nil {
+		if r.LogSql {
+			log.FromContext(ctx).V(1).Info("Error reconciling SQL resource", "err", err)
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
-func waitForMariaDB(ctx context.Context, client client.Client, resource Resource,
-	mariadb *mariadbv1alpha1.MariaDB) error {
-	if !resource.MariaDBRef().WaitForIt {
-		return nil
-	}
-	var mariadbErr *multierror.Error
-	healthy, err := health.IsMariaDBHealthy(ctx, client, mariadb, health.EndpointPolicyAll)
+func (r *SqlReconciler) requeueResult(ctx context.Context, resource Resource, err error) (ctrl.Result, error) {
 	if err != nil {
-		mariadbErr = multierror.Append(mariadbErr, err)
+		log.FromContext(ctx).V(1).Info("Error reconciling SQL resource", "err", err)
+		return ctrl.Result{Requeue: true}, nil
+	}
+	if resource.RequeueInterval() != nil {
+		if r.LogSql {
+			log.FromContext(ctx).V(1).Info("Requeuing SQL resource")
+		}
+		return ctrl.Result{RequeueAfter: resource.RequeueInterval().Duration}, nil
+	}
+	if r.RequeueInterval > 0 {
+		if r.LogSql {
+			log.FromContext(ctx).V(1).Info("Requeuing SQL resource")
+		}
+		return ctrl.Result{RequeueAfter: r.RequeueInterval}, nil
+	}
+	return ctrl.Result{}, nil
+}
+
+func waitForMariaDB(ctx context.Context, client client.Client, mdb *mariadbv1alpha1.MariaDB,
+	logSql bool) (ctrl.Result, error) {
+	healthy, err := health.IsStatefulSetHealthy(
+		ctx,
+		client,
+		clientpkg.ObjectKeyFromObject(mdb),
+		health.WithDesiredReplicas(mdb.Spec.Replicas),
+		health.WithPort(mdb.Spec.Port),
+		health.WithEndpointPolicy(health.EndpointPolicyAll),
+	)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 	if !healthy {
-		mariadbErr = multierror.Append(mariadbErr, errors.New("MariaDB not healthy"))
+		if logSql {
+			log.FromContext(ctx).V(1).Info("MariaDB unhealthy. Requeuing SQL resource")
+		}
+		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
-	return mariadbErr.ErrorOrNil()
+	return ctrl.Result{}, nil
 }

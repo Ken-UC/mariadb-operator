@@ -6,9 +6,8 @@ import (
 	"fmt"
 
 	mariadbv1alpha1 "github.com/mariadb-operator/mariadb-operator/api/v1alpha1"
-	"github.com/mariadb-operator/mariadb-operator/pkg/annotation"
+	"github.com/mariadb-operator/mariadb-operator/pkg/metadata"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -51,7 +50,7 @@ func (r *RefResolver) MariaDB(ctx context.Context, ref *mariadbv1alpha1.MariaDBR
 }
 
 func (r *RefResolver) MariaDBFromAnnotation(ctx context.Context, objMeta metav1.ObjectMeta) (*mariadbv1alpha1.MariaDB, error) {
-	mariadbAnnotation, ok := objMeta.Annotations[annotation.MariadbAnnotation]
+	mariadbAnnotation, ok := objMeta.Annotations[metadata.MariadbAnnotation]
 	if !ok {
 		return nil, ErrMariaDBAnnotationNotFound
 	}
@@ -68,6 +67,27 @@ func (r *RefResolver) MariaDBFromAnnotation(ctx context.Context, objMeta metav1.
 		return nil, fmt.Errorf("error getting MariaDB from annotation '%s': %v", objMeta.Name, err)
 	}
 	return &mariadb, nil
+}
+
+func (r *RefResolver) MaxScale(ctx context.Context, ref *corev1.ObjectReference,
+	namespace string) (*mariadbv1alpha1.MaxScale, error) {
+	if ref.Kind != "" && ref.Kind != "MaxScale" {
+		return nil, fmt.Errorf("Unsupported reference kind: '%s'", ref.Kind)
+	}
+
+	key := types.NamespacedName{
+		Name:      ref.Name,
+		Namespace: namespace,
+	}
+	if ref.Namespace != "" {
+		key.Namespace = ref.Namespace
+	}
+
+	var mxs mariadbv1alpha1.MaxScale
+	if err := r.client.Get(ctx, key, &mxs); err != nil {
+		return nil, err
+	}
+	return &mxs, nil
 }
 
 func (r *RefResolver) Backup(ctx context.Context, ref *corev1.LocalObjectReference,
@@ -98,19 +118,36 @@ func (r *RefResolver) SqlJob(ctx context.Context, ref *corev1.LocalObjectReferen
 
 func (r *RefResolver) SecretKeyRef(ctx context.Context, selector corev1.SecretKeySelector,
 	namespace string) (string, error) {
-	nn := types.NamespacedName{
+	key := types.NamespacedName{
 		Name:      selector.Name,
 		Namespace: namespace,
 	}
-	var secret v1.Secret
-	if err := r.client.Get(ctx, nn, &secret); err != nil {
-		return "", fmt.Errorf("error getting secret: %v", err)
+	var secret corev1.Secret
+	if err := r.client.Get(ctx, key, &secret); err != nil {
+		return "", fmt.Errorf("error getting Secret: %v", err)
 	}
 
 	data, ok := secret.Data[selector.Key]
 	if !ok {
-		return "", fmt.Errorf("secret key \"%s\" not found", selector.Key)
+		return "", fmt.Errorf("Secret key \"%s\" not found", selector.Key)
+	}
+	return string(data), nil
+}
+
+func (r *RefResolver) ConfigMapKeyRef(ctx context.Context, selector *corev1.ConfigMapKeySelector,
+	namespace string) (string, error) {
+	key := types.NamespacedName{
+		Name:      selector.Name,
+		Namespace: namespace,
+	}
+	var configMap corev1.ConfigMap
+	if err := r.client.Get(ctx, key, &configMap); err != nil {
+		return "", fmt.Errorf("error getting ConfigMap: %v", err)
 	}
 
+	data, ok := configMap.Data[selector.Key]
+	if !ok {
+		return "", fmt.Errorf("ConfigMap key \"%s\" not found", selector.Key)
+	}
 	return string(data), nil
 }

@@ -1,28 +1,12 @@
-/*
-Copyright 2022.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package v1alpha1
 
 import (
 	"fmt"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 )
 
 // WaitPoint defines whether the transaction should wait for ACK before committing to the storage engine.
@@ -98,9 +82,11 @@ func (g Gtid) MariaDBFormat() (string, error) {
 type PrimaryReplication struct {
 	// PodIndex is the StatefulSet index of the primary node. The user may change this field to perform a manual switchover.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	PodIndex *int `json:"podIndex,omitempty"`
 	// AutomaticFailover indicates whether the operator should automatically update PodIndex to perform an automatic primary failover.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch"}
 	AutomaticFailover *bool `json:"automaticFailover,omitempty"`
 }
 
@@ -122,23 +108,31 @@ type ReplicaReplication struct {
 	// WaitPoint defines whether the transaction should wait for ACK before committing to the storage engine.
 	// More info: https://mariadb.com/kb/en/semisynchronous-replication/#rpl_semi_sync_master_wait_point.
 	// +optional
+	// +kubebuilder:validation:Enum=AfterSync;AfterCommit
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	WaitPoint *WaitPoint `json:"waitPoint,omitempty"`
 	// Gtid indicates which Global Transaction ID should be used when connecting a replica to the master.
 	// See: https://mariadb.com/kb/en/gtid/#using-current_pos-vs-slave_pos.
 	// +optional
+	// +kubebuilder:validation:Enum=CurrentPos;SlavePos
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	Gtid *Gtid `json:"gtid,omitempty"`
 	// ReplPasswordSecretKeyRef provides a reference to the Secret to use as password for the replication user.
 	// +optional
-	ReplPasswordSecretKeyRef *corev1.SecretKeySelector `json:"replPasswordSecretKeyRef,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	ReplPasswordSecretKeyRef *GeneratedSecretKeyRef `json:"replPasswordSecretKeyRef,omitempty"`
 	// ConnectionTimeout to be used when the replica connects to the primary.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	ConnectionTimeout *metav1.Duration `json:"connectionTimeout,omitempty"`
 	// ConnectionRetries to be used when the replica connects to the primary.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:number"}
 	ConnectionRetries *int `json:"connectionRetries,omitempty"`
 	// SyncTimeout defines the timeout for a replica to be synced with the primary when performing a primary switchover.
 	// If the timeout is reached, the replica GTID will be reset and the switchover will continue.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	SyncTimeout *metav1.Duration `json:"syncTimeout,omitempty"`
 }
 
@@ -186,9 +180,11 @@ func (r *ReplicaReplication) Validate() error {
 type Replication struct {
 	// ReplicationSpec is the Replication desired state specification.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	ReplicationSpec `json:",inline"`
 	// Enabled is a flag to enable Replication.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch"}
 	Enabled bool `json:"enabled,omitempty"`
 }
 
@@ -196,15 +192,23 @@ type Replication struct {
 type ReplicationSpec struct {
 	// Primary is the replication configuration for the primary node.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
 	Primary *PrimaryReplication `json:"primary,omitempty"`
 	// ReplicaReplication is the replication configuration for the replica nodes.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
 	Replica *ReplicaReplication `json:"replica,omitempty"`
 	// SyncBinlog indicates whether the binary log should be synchronized to the disk after every event.
 	// It trades off performance for consistency.
 	// See: https://mariadb.com/kb/en/replication-and-binary-log-system-variables/#sync_binlog.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch","urn:alm:descriptor:com.tectonic.ui:advanced"}
 	SyncBinlog *bool `json:"syncBinlog,omitempty"`
+	// ProbesEnabled indicates to use replication specific liveness and readiness probes.
+	// This probes check that the primary can receive queries and that the replica has the replication thread running.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:booleanSwitch","urn:alm:descriptor:com.tectonic.ui:advanced"}
+	ProbesEnabled *bool `json:"probesEnabled,omitempty"`
 }
 
 // FillWithDefaults fills the current ReplicationSpec object with DefaultReplicationSpec.
@@ -226,6 +230,10 @@ func (r *ReplicationSpec) FillWithDefaults() {
 		syncBinlog := *DefaultReplicationSpec.SyncBinlog
 		r.SyncBinlog = &syncBinlog
 	}
+	if r.ProbesEnabled == nil {
+		probesEnabled := *DefaultReplicationSpec.ProbesEnabled
+		r.ProbesEnabled = &probesEnabled
+	}
 }
 
 var (
@@ -234,31 +242,46 @@ var (
 	// DefaultReplicationSpec provides sensible defaults for the ReplicationSpec.
 	DefaultReplicationSpec = ReplicationSpec{
 		Primary: &PrimaryReplication{
-			PodIndex:          func() *int { pi := 0; return &pi }(),
-			AutomaticFailover: func() *bool { sb := true; return &sb }(),
+			PodIndex:          ptr.To(0),
+			AutomaticFailover: ptr.To(true),
 		},
 		Replica: &ReplicaReplication{
-			WaitPoint:         func() *WaitPoint { w := WaitPointAfterSync; return &w }(),
-			Gtid:              func() *Gtid { g := GtidCurrentPos; return &g }(),
-			ConnectionTimeout: &tenSeconds,
-			ConnectionRetries: func() *int { cr := 10; return &cr }(),
-			SyncTimeout:       &tenSeconds,
+			WaitPoint:         ptr.To(WaitPointAfterSync),
+			Gtid:              ptr.To(GtidCurrentPos),
+			ConnectionTimeout: ptr.To(tenSeconds),
+			ConnectionRetries: ptr.To(10),
+			SyncTimeout:       ptr.To(tenSeconds),
 		},
-		SyncBinlog: func() *bool { sb := true; return &sb }(),
+		SyncBinlog:    ptr.To(true),
+		ProbesEnabled: ptr.To(false),
 	}
 )
 
-// IsConfiguringReplication indicates whether replication is being configured.
-func (m *MariaDB) IsConfiguringReplication() bool {
-	return meta.IsStatusConditionFalse(m.Status.Conditions, ConditionTypeReplicationConfigured)
-}
-
-// HasConfiguredReplication indicates whether replication has been configured.
-func (m *MariaDB) HasConfiguredReplication() bool {
-	return meta.IsStatusConditionTrue(m.Status.Conditions, ConditionTypeReplicationConfigured)
+// IsReplicationConfigured indicates whether replication has been configured.
+func (m *MariaDB) IsReplicationConfigured() bool {
+	return m.Status.ReplicationStatus.IsReplicationConfigured()
 }
 
 // IsSwitchingPrimary indicates whether the primary is being switched.
 func (m *MariaDB) IsSwitchingPrimary() bool {
 	return meta.IsStatusConditionFalse(m.Status.Conditions, ConditionTypePrimarySwitched)
+}
+
+type ReplicationState string
+
+const (
+	ReplicationStateMaster        ReplicationState = "Master"
+	ReplicationStateSlave         ReplicationState = "Slave"
+	ReplicationStateNotConfigured ReplicationState = "NotConfigured"
+)
+
+type ReplicationStatus map[string]ReplicationState
+
+func (r ReplicationStatus) IsReplicationConfigured() bool {
+	for _, state := range r {
+		if state == ReplicationStateNotConfigured {
+			return false
+		}
+	}
+	return true
 }

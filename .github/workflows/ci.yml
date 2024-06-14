@@ -7,21 +7,36 @@ on:
   pull_request: {}
 
 env:
-  GOLANGCI_VERSION: "v1.52.2"
+  GOLANGCI_VERSION: "v1.56.2"
 
 jobs:
   detect-noop:
+    name: Detect noop
     runs-on: ubuntu-latest
     outputs:
       noop: ${{ steps.noop.outputs.should_skip }}
     steps:
       - name: Detect no-op changes
         id: noop
-        uses: fkirc/skip-duplicate-actions@v5.3.0
+        uses: fkirc/skip-duplicate-actions@v5.3.1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          paths_ignore: '["**.md"]'
+          paths_ignore: '["*.md","**.md.gotmpl","examples/**"]'
           concurrent_skipping: false
+
+  detect-ent:
+    name: Detect enterprise
+    runs-on: ubuntu-latest
+    outputs:
+      ent: ${{ steps.ent.outputs.ent }}
+    steps:
+      - name: Detect enterprise
+        id: ent
+        env: 
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USER }}
+        if: "${{ env.DOCKERHUB_USER != '' }}"
+        run: |
+          echo "ent='true'" >> $GITHUB_OUTPUT
 
   lint:
     name: Lint
@@ -30,16 +45,16 @@ jobs:
     if: ${{ needs.detect-noop.outputs.noop != 'true' }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
           cache: true
 
       - name: GolangCI Lint
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v5
         with:
           version: ${{ env.GOLANGCI_VERSION }}
 
@@ -50,10 +65,10 @@ jobs:
     if: ${{ needs.detect-noop.outputs.noop != 'true' }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
           cache: true
@@ -61,10 +76,14 @@ jobs:
       - name: Build
         run: make build
 
+      - name: Build Enterprise
+        run: make build-ent
+
       - name: Build Docker
         run: make docker-build
-        env:
-          PLATFORM: linux/amd64
+
+      - name: Build Enterprise Docker
+        run: make docker-build-ent
 
   test:
     name: Test
@@ -73,35 +92,94 @@ jobs:
     if: ${{ needs.detect-noop.outputs.noop != 'true' }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
           cache: true
 
       - name: Cluster
         run: |
-          make cluster
+          make cluster-ha
           make install
+          make install-minio
           make net
 
       - name: Test
         run: make test
-        env:
-          MARIADB_OPERATOR_NAME: mariadb-operator
-          MARIADB_OPERATOR_NAMESPACE: default
-          MARIADB_OPERATOR_SA_PATH: /tmp/mariadb-operator/token
 
-  check-diff:
-    name: Check diff
+  test-ent:
+    name: Test enterprise
+    runs-on: ubuntu-latest
+    needs: 
+      - detect-noop
+      - detect-ent
+    if: ${{ needs.detect-noop.outputs.noop != 'true' && needs.detect-ent.outputs.ent != '' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+          cache: true
+
+      - name: Login DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USER }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login GAR
+        uses: docker/login-action@v3
+        with:
+          registry: us-central1-docker.pkg.dev
+          username: _json_key
+          password: ${{ secrets.GAR_JSON_KEY }}
+
+      - name: Cluster
+        run: |
+          make cluster
+          make registry
+          make install-ent
+          make install-minio
+          make net
+
+      - name: Test
+        run: make test-ent
+
+  olm:
+    name: OLM
     runs-on: ubuntu-latest
     needs: detect-noop
     if: ${{ needs.detect-noop.outputs.noop != 'true' }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+
+      - name: Validate
+        run: make bundle-validate
+
+      - name: Build image
+        run: make bundle-build
+
+      - name: Cluster
+        run: make cluster
+
+      - name: Scorecard
+        run: make bundle-scorecard
+
+  gen:
+    name: Generate artifacts
+    runs-on: ubuntu-latest
+    needs: detect-noop
+    if: ${{ needs.detect-noop.outputs.noop != 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Generate
         run: make generate
@@ -110,3 +188,22 @@ jobs:
         uses: mmontes11/diff-porcelain@v0.0.1
         with:
           message: Generated artifacts are not up to date. Run 'make generate' and commit the changes.
+
+  licenses:
+    name: Generate licenses
+    runs-on: ubuntu-latest
+    needs: detect-noop
+    if: ${{ needs.detect-noop.outputs.noop != 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate
+        run: make licenses
+
+      - name: Check licenses
+        run: |
+          if [ ! -d "licenses" ] || [ ! -n "$(ls -A licenses)" ]; then
+            echo "Error: No licenses generated"
+            exit 1
+          fi

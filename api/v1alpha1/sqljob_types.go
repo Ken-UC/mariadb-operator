@@ -1,19 +1,3 @@
-/*
-Copyright 2022.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package v1alpha1
 
 import (
@@ -24,35 +8,69 @@ import (
 
 // SqlJobSpec defines the desired state of SqlJob
 type SqlJobSpec struct {
+	// JobContainerTemplate defines templates to configure Container objects.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	JobContainerTemplate `json:",inline"`
+	// JobPodTemplate defines templates to configure Pod objects.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	JobPodTemplate `json:",inline"`
+	// MariaDBRef is a reference to a MariaDB object.
 	// +kubebuilder:validation:Required
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	MariaDBRef MariaDBRef `json:"mariaDbRef" webhook:"inmutable"`
-
+	// Schedule defines when the SqlJob will be executed.
+	// +kubebuilder:validation:Required
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	Schedule *Schedule `json:"schedule,omitempty"`
+	// Username to be impersonated when executing the SqlJob.
 	// +kubebuilder:validation:Required
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	Username string `json:"username" webhook:"inmutable"`
+	// UserPasswordSecretKeyRef is a reference to the impersonated user's password to be used when executing the SqlJob.
 	// +kubebuilder:validation:Required
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	PasswordSecretKeyRef corev1.SecretKeySelector `json:"passwordSecretKeyRef" webhook:"inmutable"`
-
+	// Username to be used when executing the SqlJob.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	Database *string `json:"database,omitempty" webhook:"inmutable"`
-
+	// DependsOn defines dependencies with other SqlJob objectecs.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	DependsOn []corev1.LocalObjectReference `json:"dependsOn,omitempty" webhook:"inmutable"`
-
-	Sql                *string                      `json:"sql,omitempty" webhook:"inmutable"`
+	// Sql is the script to be executed by the SqlJob.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec
+	Sql *string `json:"sql,omitempty" webhook:"inmutable"`
+	// SqlConfigMapKeyRef is a reference to a ConfigMap containing the Sql script.
+	// It is defaulted to a ConfigMap with the contents of the Sql field.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
 	SqlConfigMapKeyRef *corev1.ConfigMapKeySelector `json:"sqlConfigMapKeyRef,omitempty" webhook:"inmutableinit"`
+	// BackoffLimit defines the maximum number of attempts to successfully execute a SqlJob.
+	// +optional
 	// +kubebuilder:default=5
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:number","urn:alm:descriptor:com.tectonic.ui:advanced"}
 	BackoffLimit int32 `json:"backoffLimit,omitempty"`
+	// RestartPolicy to be added to the SqlJob Pod.
+	// +optional
 	// +kubebuilder:default=OnFailure
+	// +kubebuilder:validation:Enum=Always;OnFailure;Never
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
 	RestartPolicy corev1.RestartPolicy `json:"restartPolicy,omitempty" webhook:"inmutable"`
-	// +kubebuilder:validation:Optional
-	Resources *corev1.ResourceRequirements `json:"resources,omitempty" webhook:"inmutable"`
-
-	Affinity     *corev1.Affinity    `json:"affinity,omitempty"`
-	NodeSelector map[string]string   `json:"nodeSelector,omitempty"`
-	Tolerations  []corev1.Toleration `json:"tolerations,omitempty"`
+	// InheritMetadata defines the metadata to be inherited by children resources.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	InheritMetadata *Metadata `json:"inheritMetadata,omitempty"`
 }
 
 // SqlJobStatus defines the observed state of SqlJob
 type SqlJobStatus struct {
+	// Conditions for the SqlJob object.
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=status,xDescriptors={"urn:alm:descriptor:io.kubernetes.conditions"}
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
@@ -63,15 +81,16 @@ func (s *SqlJobStatus) SetCondition(condition metav1.Condition) {
 	meta.SetStatusCondition(&s.Conditions, condition)
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:resource:shortName=smdb
-//+kubebuilder:subresource:status
-//+kubebuilder:printcolumn:name="Complete",type="string",JSONPath=".status.conditions[?(@.type==\"Complete\")].status"
-//+kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type==\"Complete\")].message"
-//+kubebuilder:printcolumn:name="MariaDB",type="string",JSONPath=".spec.mariaDbRef.name"
-//+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:shortName=smdb
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Complete",type="string",JSONPath=".status.conditions[?(@.type==\"Complete\")].status"
+// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type==\"Complete\")].message"
+// +kubebuilder:printcolumn:name="MariaDB",type="string",JSONPath=".spec.mariaDbRef.name"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +operator-sdk:csv:customresourcedefinitions:resources={{SqlJob,v1alpha1},{ConfigMap,v1},{CronJob,v1},{Job,v1},{ServiceAccount,v1}}
 
-// SqlJob is the Schema for the sqljobs API
+// SqlJob is the Schema for the sqljobs API. It is used to run sql scripts as jobs.
 type SqlJob struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -82,6 +101,13 @@ type SqlJob struct {
 
 func (s *SqlJob) IsComplete() bool {
 	return meta.IsStatusConditionTrue(s.Status.Conditions, ConditionTypeComplete)
+}
+
+func (s *SqlJob) SetDefaults(mariadb *MariaDB) {
+	if s.Spec.BackoffLimit == 0 {
+		s.Spec.BackoffLimit = 5
+	}
+	s.Spec.JobPodTemplate.SetDefaults(s.ObjectMeta, mariadb.ObjectMeta)
 }
 
 //+kubebuilder:object:root=true

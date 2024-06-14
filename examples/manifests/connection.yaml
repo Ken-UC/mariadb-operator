@@ -1,0 +1,32 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Connection
+metadata:
+  name: connection
+spec:
+  mariaDbRef:
+    name: mariadb
+  username: mariadb
+  passwordSecretKeyRef:
+    name: mariadb
+    key: password
+  database: mariadb
+  params:
+    parseTime: "true"
+    timeout: "5s"
+  secretName: connection
+  secretTemplate:
+    metadata:
+      labels:
+        k8s.mariadb.com/connection: sample
+      annotations:
+        k8s.mariadb.com/connection: sample
+    key: dsn
+    usernameKey: username
+    passwordKey: password
+    hostKey: host
+    portKey: port
+    databaseKey: database
+  healthCheck:
+    interval: 30s
+    retryInterval: 3s
+  serviceName: mariadb
